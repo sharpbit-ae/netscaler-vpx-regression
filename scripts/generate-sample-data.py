@@ -571,6 +571,44 @@ def generate_probe_timings(is_candidate=False):
     for _ in range(8):
         scenarios.append(("burst", "app.lab.local", "GET", "Mozilla/5.0 Chrome/122.0", "https"))
 
+    # Sample response headers by scenario type
+    def sample_headers(scenario, status_code):
+        base = [f"HTTP/1.1 {status_code}"]
+        if scenario == "bot":
+            return base + [
+                "X-Frame-Options: DENY",
+                "X-Content-Type-Options: nosniff",
+                "Content-Length: 0",
+                "Connection: close",
+            ]
+        if scenario == "redirect":
+            return base + [
+                "Location: https://app.lab.local/",
+                "Content-Length: 0",
+                "Connection: keep-alive",
+            ]
+        if scenario == "cors":
+            return base + [
+                "Access-Control-Allow-Origin: *",
+                "Access-Control-Allow-Methods: GET; POST; OPTIONS",
+                "Access-Control-Allow-Headers: Content-Type; Authorization",
+                "Access-Control-Max-Age: 86400",
+                "Content-Length: 0",
+            ]
+        # Normal / API / static / method / burst
+        return base + [
+            "X-Frame-Options: SAMEORIGIN",
+            "X-Content-Type-Options: nosniff",
+            "Strict-Transport-Security: max-age=31536000; includeSubDomains",
+            "Content-Security-Policy: default-src 'self'",
+            "Cache-Control: no-store; no-cache; must-revalidate",
+            "X-XSS-Protection: 1; mode=block",
+            "Referrer-Policy: strict-origin-when-cross-origin",
+            f"Content-Type: {'application/json' if scenario == 'api' else 'text/html'}; charset=utf-8",
+            f"Content-Length: {random.randint(200, 15000)}",
+            "Connection: keep-alive",
+        ]
+
     for i, (scenario, host, method, ua, scheme) in enumerate(scenarios):
         if scenario == "bot":
             status, connect, tls = 403, random.randint(8, 15), random.randint(30, 50)
@@ -604,6 +642,7 @@ def generate_probe_timings(is_candidate=False):
             "time_connect_ms": connect, "time_tls_ms": tls,
             "time_ttfb_ms": ttfb, "time_total_ms": total,
             "blocked": str(blocked).lower(),
+            "response_headers": "|".join(sample_headers(scenario, status)),
         })
     return rows
 
@@ -657,7 +696,7 @@ print(f"Logs:      {len(logs)} log files")
 # Generate probe timing CSVs (50 requests each)
 probe_fields = ["request_num", "scenario", "host", "method", "user_agent",
                 "http_status", "time_connect_ms", "time_tls_ms",
-                "time_ttfb_ms", "time_total_ms", "blocked"]
+                "time_ttfb_ms", "time_total_ms", "blocked", "response_headers"]
 for label, is_cand in [("baseline", False), ("candidate", True)]:
     probe_rows = generate_probe_timings(is_candidate=is_cand)
     probe_path = f"{OUT}/{label}-probe-timings.csv"
