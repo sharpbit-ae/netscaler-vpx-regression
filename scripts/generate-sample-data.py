@@ -1,0 +1,501 @@
+#!/usr/bin/env python3
+"""Generate realistic sample data for VPX firmware regression report."""
+import json
+import os
+import sys
+import random
+from datetime import datetime, timedelta, timezone
+
+random.seed(42)
+OUT = sys.argv[1] if len(sys.argv) > 1 else "/tmp/vpx-sample-report"
+
+# ─── Test result helpers ───
+
+def pass_test(cat, test, expected, detail=""):
+    return {"category": cat, "test": test, "status": "PASS",
+            "expected": str(expected), "actual": str(expected), "detail": detail}
+
+def fail_test(cat, test, expected, actual, detail=""):
+    return {"category": cat, "test": test, "status": "FAIL",
+            "expected": str(expected), "actual": str(actual), "detail": detail}
+
+def warn_test(cat, test, expected, actual, detail=""):
+    return {"category": cat, "test": test, "status": "WARN",
+            "expected": str(expected), "actual": str(actual), "detail": detail}
+
+# ─── Build 375 test results per VPX ───
+
+def build_results(is_candidate=False):
+    r = []
+
+    # 1. Features (8 tests)
+    for feat in ["lb", "cs", "ssl", "rewrite", "responder", "cmp", "appflow", "ic"]:
+        r.append(pass_test("Features", f"nsfeature.{feat}", "true"))
+
+    # 2. Modes (5 tests)
+    for mode in ["fr", "tcpb", "edge", "l3", "ulfd"]:
+        r.append(pass_test("Modes", f"nsmode.{mode}", "true"))
+
+    # 3. System Parameters (7 tests)
+    for k, v in [("minpasswordlen", "8"), ("strongpassword", "enableall"),
+                 ("maxclient", "10"), ("timeout", "900"),
+                 ("restrictedtimeout", "enabled"), ("basicauth", "disabled"),
+                 ("reauthonauthparamchange", "enabled")]:
+        r.append(pass_test("System Parameters", f"systemparameter.{k}", v))
+
+    # 4. Management (5 tests)
+    for k, v in [("nsip.restrictaccess", "ENABLED"), ("nsip.gui", "SECUREONLY"),
+                 ("nsip.mgmtaccess", "ENABLED"), ("nsip.type", "NSIP"),
+                 ("nsrpcnode.secure", "ON")]:
+        r.append(pass_test("Management", k, v))
+
+    # 5. SSL Frontend Profile (9 tests)
+    for k, v in [("ssl3", "DISABLED"), ("tls1", "DISABLED"), ("tls11", "DISABLED"),
+                 ("tls12", "ENABLED"), ("tls13", "ENABLED"),
+                 ("denysslreneg", "NONSECURE"), ("hsts", "ENABLED"),
+                 ("maxage", "31536000"), ("sslprofile.name", "ns_default_ssl_profile_frontend")]:
+        if is_candidate and k == "tls13":
+            r.append(fail_test("SSL Frontend Profile", f"sslprofile_frontend.{k}",
+                              "ENABLED", "DISABLED",
+                              "REGRESSION: TLS 1.3 not enabled after firmware upgrade"))
+        else:
+            r.append(pass_test("SSL Frontend Profile", f"sslprofile_frontend.{k}", v))
+
+    # 6. SSL Backend Profile (5 tests)
+    for k, v in [("ssl3", "DISABLED"), ("tls1", "DISABLED"), ("tls11", "DISABLED"),
+                 ("tls12", "ENABLED"), ("tls13", "ENABLED")]:
+        r.append(pass_test("SSL Backend Profile", f"sslprofile_backend.{k}", v))
+
+    # 7. SSL Ciphers (4 tests)
+    for p, c in [(1, "TLS1.2-AES256-GCM-SHA384"), (2, "TLS1.2-AES128-GCM-SHA256"),
+                 (3, "TLS1.3-AES256-GCM-SHA384"), (4, "TLS1.3-CHACHA20-POLY1305-SHA256")]:
+        r.append(pass_test("SSL Ciphers", f"cipher_priority_{p}", c))
+
+    # 8. Certificates (6 tests)
+    for k, v in [("certkey.wildcard.lab.local", "wildcard.lab.local"),
+                 ("certkey.wildcard.cert", "/nsconfig/ssl/wildcard.lab.local.crt"),
+                 ("certkey.wildcard.key", "/nsconfig/ssl/wildcard.lab.local.key"),
+                 ("certkey.lab-ca", "lab-ca"),
+                 ("certkey.chain", "lab-ca"),
+                 ("cert.wildcard.daystoexpiry", ">30")]:
+        r.append(pass_test("Certificates", k, v))
+
+    # 9. Service Groups (40 tests)
+    for sg, stype in [("sg_web_http", "HTTP"), ("sg_web_https", "SSL"),
+                       ("sg_tcp_generic", "TCP"), ("sg_dns", "DNS")]:
+        r.append(pass_test("Service Groups", f"{sg}.servicetype", stype))
+        r.append(pass_test("Service Groups", f"{sg}.usip", "NO"))
+        r.append(pass_test("Service Groups", f"{sg}.cka", "YES"))
+        r.append(pass_test("Service Groups", f"{sg}.tcpb", "YES"))
+        # Members
+        for srv in ["srv_host01", "srv_opnsense"]:
+            r.append(pass_test("Service Groups", f"{sg}.member.{srv}", "present"))
+            r.append(pass_test("Service Groups", f"{sg}.member.{srv}.state", "ENABLED"))
+        # Monitor binding
+        mon = {"sg_web_http": "mon_http_200", "sg_web_https": "mon_https_200",
+               "sg_tcp_generic": "mon_tcp_quick", "sg_dns": "dns"}[sg]
+        r.append(pass_test("Service Groups", f"{sg}.monitor", mon))
+        r.append(pass_test("Service Groups", f"{sg}.monitor.state", "BOUND"))
+
+    # 10. LB VServers (30 tests)
+    for lb, stype, method, persist in [
+        ("lb_vsrv_web", "HTTP", "ROUNDROBIN", "COOKIEINSERT"),
+        ("lb_vsrv_api", "HTTP", "LEASTCONNECTION", "SOURCEIP"),
+        ("lb_vsrv_web_ssl", "SSL", "ROUNDROBIN", "SOURCEIP"),
+        ("lb_vsrv_tcp", "TCP", "LEASTCONNECTION", "SOURCEIP"),
+        ("lb_vsrv_dns", "DNS", "ROUNDROBIN", "NONE"),
+    ]:
+        r.append(pass_test("LB VServers", f"{lb}.servicetype", stype))
+        r.append(pass_test("LB VServers", f"{lb}.lbmethod", method))
+        r.append(pass_test("LB VServers", f"{lb}.persistencetype", persist))
+        r.append(pass_test("LB VServers", f"{lb}.curstate", "UP"))
+        r.append(pass_test("LB VServers", f"{lb}.effectivestate", "UP"))
+        r.append(pass_test("LB VServers", f"{lb}.tcpprofilename", "tcp_prof_web"))
+
+    # 11. CS VServers (16 tests)
+    for cs, stype, port in [("cs_vsrv_https", "SSL", "443"), ("cs_vsrv_http", "HTTP", "80")]:
+        r.append(pass_test("CS VServers", f"{cs}.servicetype", stype))
+        r.append(pass_test("CS VServers", f"{cs}.port", port))
+        r.append(pass_test("CS VServers", f"{cs}.curstate", "UP"))
+        r.append(pass_test("CS VServers", f"{cs}.tcpprofilename", "tcp_prof_web"))
+        r.append(pass_test("CS VServers", f"{cs}.httpprofilename", "http_prof_web"))
+    # CS policies
+    for pol, rule_frag in [("cs_pol_api", "api.lab.local"), ("cs_pol_static", "static.lab.local"),
+                            ("cs_pol_app", "app.lab.local")]:
+        r.append(pass_test("CS VServers", f"{pol}.bound_to_cs_vsrv_https", "true"))
+        r.append(pass_test("CS VServers", f"{pol}.rule_contains", rule_frag))
+
+    # 12. Rewrite Policies (50 tests — actions + policies + bindings)
+    # Security headers (response)
+    security_headers = [
+        ("rw_act_xframe", "insert_http_header", "X-Frame-Options"),
+        ("rw_act_nosniff", "insert_http_header", "X-Content-Type-Options"),
+        ("rw_act_xss", "insert_http_header", "X-XSS-Protection"),
+        ("rw_act_referrer", "insert_http_header", "Referrer-Policy"),
+        ("rw_act_permissions", "insert_http_header", "Permissions-Policy"),
+        ("rw_act_csp", "insert_http_header", "Content-Security-Policy"),
+        ("rw_act_del_server", "delete_http_header", "Server"),
+        ("rw_act_del_powered", "delete_http_header", "X-Powered-By"),
+        ("rw_act_del_aspnet", "delete_http_header", "X-AspNet-Version"),
+        ("rw_act_download_options", "insert_http_header", "X-Download-Options"),
+        ("rw_act_cross_domain", "insert_http_header", "X-Permitted-Cross-Domain-Policies"),
+        ("rw_act_cache_control", "insert_http_header", "Cache-Control"),
+    ]
+    for act, atype, target in security_headers:
+        r.append(pass_test("Rewrite Policies", f"{act}.type", atype))
+        r.append(pass_test("Rewrite Policies", f"{act}.target", target))
+
+    # Request headers
+    for act, target in [("rw_act_xff", "X-Forwarded-For"), ("rw_act_xrealip", "X-Real-IP"),
+                         ("rw_act_xproto", "X-Forwarded-Proto"), ("rw_act_reqid", "X-Request-ID")]:
+        r.append(pass_test("Rewrite Policies", f"{act}.type", "insert_http_header"))
+        r.append(pass_test("Rewrite Policies", f"{act}.target", target))
+
+    # CORS
+    for h in ["cors_origin", "cors_methods", "cors_headers", "cors_credentials", "cors_maxage"]:
+        r.append(pass_test("Rewrite Policies", f"rw_act_{h}.type", "insert_http_header"))
+        r.append(pass_test("Rewrite Policies", f"rw_pol_{h}.bound", "cs_vsrv_https:RESPONSE"))
+
+    # Audit noop
+    r.append(pass_test("Rewrite Policies", "rw_act_log_req.type", "noop"))
+    r.append(pass_test("Rewrite Policies", "rw_act_log_res.type", "noop"))
+    r.append(pass_test("Rewrite Policies", "rw_pol_log_req.logaction", "audit_act_request"))
+    r.append(pass_test("Rewrite Policies", "rw_pol_log_res.logaction", "audit_act_response"))
+
+    # 13. Responder Policies (12 tests)
+    r.append(pass_test("Responder Policies", "rs_act_https_redirect.type", "redirect"))
+    r.append(pass_test("Responder Policies", "rs_act_https_redirect.responsestatuscode", "301"))
+    r.append(pass_test("Responder Policies", "rs_pol_https_redirect.bound", "cs_vsrv_http:REQUEST"))
+    r.append(pass_test("Responder Policies", "rs_act_cors_preflight.type", "respondwith"))
+    r.append(pass_test("Responder Policies", "rs_pol_cors_preflight.bound", "cs_vsrv_https:REQUEST"))
+    r.append(pass_test("Responder Policies", "rs_pol_cors_preflight.priority", "25"))
+    r.append(pass_test("Responder Policies", "rs_act_block_bot.type", "respondwith"))
+    r.append(pass_test("Responder Policies", "rs_pol_block_bot.bound", "cs_vsrv_https:REQUEST"))
+    r.append(pass_test("Responder Policies", "rs_pol_block_bot.priority", "40"))
+    r.append(pass_test("Responder Policies", "rs_act_maintenance.type", "respondwith"))
+    r.append(pass_test("Responder Policies", "rs_pol_maint1.bound", "cs_vsrv_https:REQUEST"))
+    r.append(pass_test("Responder Policies", "rs_pol_maint1.priority", "30"))
+
+    # 14. HTTP Profile (14 tests)
+    for k, v in [("name", "http_prof_web"), ("dropinvalreqs", "ENABLED"),
+                 ("markhttp09inval", "ENABLED"), ("markconnreqinval", "ENABLED"),
+                 ("marktracereqinval", "ENABLED"), ("markrfc7230noncompliantinval", "ENABLED"),
+                 ("conmultiplex", "ENABLED"), ("dropextradata", "ENABLED"),
+                 ("websocket", "ENABLED"), ("http2", "ENABLED"),
+                 ("http2maxconcurrentstreams", "128"), ("http2maxheaderlistsize", "32768"),
+                 ("maxreusepool", "0")]:
+        if is_candidate and k == "http2maxconcurrentstreams":
+            r.append(fail_test("HTTP Profile", f"http_prof_web.{k}",
+                              "128", "100",
+                              "REGRESSION: HTTP/2 max concurrent streams reduced from 128 to 100"))
+        else:
+            r.append(pass_test("HTTP Profile", f"http_prof_web.{k}", v))
+    r.append(pass_test("HTTP Profile", "http_prof_web.bound_to_cs_vsrv_https", "true"))
+
+    # 15. TCP Profile (18 tests)
+    for k, v in [("name", "tcp_prof_web"), ("ws", "ENABLED"), ("wsval", "8"),
+                 ("sack", "ENABLED"), ("nagle", "DISABLED"), ("maxburst", "10"),
+                 ("initialcwnd", "16"), ("oooqsize", "300"), ("minrto", "400"),
+                 ("flavor", "CUBIC"), ("rstwindowattenuate", "ENABLED"),
+                 ("spoofsyndrop", "ENABLED"), ("ecn", "ENABLED"),
+                 ("timestamp", "ENABLED"), ("dsack", "ENABLED"), ("frto", "ENABLED"),
+                 ("ka", "ENABLED"), ("kaconnidletime", "300")]:
+        r.append(pass_test("TCP Profile", f"tcp_prof_web.{k}", v))
+
+    # 16. Timeouts (3 tests)
+    for k, v in [("zombie", "600"), ("halfclose", "300"), ("nontcpzombie", "300")]:
+        r.append(pass_test("Timeouts", f"nstimeout.{k}", v))
+
+    # 17. Compression Policies (10 tests)
+    for pol, content_type in [("cmp_pol_text", "text/"), ("cmp_pol_json", "application/json"),
+                               ("cmp_pol_js", "application/javascript"),
+                               ("cmp_pol_xml", "application/xml"), ("cmp_pol_svg", "image/svg+xml")]:
+        r.append(pass_test("Compression", f"{pol}.resaction", "COMPRESS"))
+        r.append(pass_test("Compression", f"{pol}.bound", "cs_vsrv_https:RESPONSE"))
+
+    # 18. Bot Blocking (12 tests)
+    r.append(pass_test("Bot Blocking", "ps_bad_useragents.exists", "true"))
+    for ua in ["sqlmap", "nikto", "masscan", "nmap", "dirbuster",
+               "gobuster", "wpscan", "nuclei", "ZmEu", "python-requests"]:
+        r.append(pass_test("Bot Blocking", f"ps_bad_useragents.contains.{ua}", "true"))
+    if is_candidate:
+        r.append(warn_test("Bot Blocking", "ps_bad_useragents.count", "10", "10",
+                           "Consider adding 'curl/' and 'wget/' to bot blocking patset"))
+    else:
+        r.append(pass_test("Bot Blocking", "ps_bad_useragents.count", "10"))
+
+    # 19. AppExpert Objects (8 tests)
+    r.append(pass_test("AppExpert", "sm_url_routes.exists", "true"))
+    for key, val in [("/api", "lb_vsrv_api"), ("/app", "lb_vsrv_web"), ("/health", "lb_vsrv_web")]:
+        r.append(pass_test("AppExpert", f"sm_url_routes[{key}]", val))
+    r.append(pass_test("AppExpert", "ps_allowed_origins.exists", "true"))
+    for origin in ["https://app.lab.local", "https://api.lab.local", "https://lab.local"]:
+        r.append(pass_test("AppExpert", f"ps_allowed_origins.contains.{origin.split('//')[1]}", "true"))
+
+    # 20. Maintenance Mode (5 tests)
+    r.append(pass_test("Maintenance Mode", "v_maintenance.type", "ulong"))
+    r.append(pass_test("Maintenance Mode", "v_maintenance.scope", "global"))
+    r.append(pass_test("Maintenance Mode", "a_maintenance_off.value", "0"))
+    r.append(pass_test("Maintenance Mode", "a_maintenance_on.value", "1"))
+    r.append(pass_test("Maintenance Mode", "rs_pol_maint1.rule", "$v_maintenance.EQ(1)"))
+
+    # 21. Monitors (15 tests)
+    for mon, mtype in [("mon_http_200", "HTTP"), ("mon_tcp_quick", "TCP"), ("mon_https_200", "HTTP-ECV")]:
+        r.append(pass_test("Monitors", f"{mon}.type", mtype))
+        r.append(pass_test("Monitors", f"{mon}.state", "ENABLED"))
+        r.append(pass_test("Monitors", f"{mon}.retries", "3"))
+    r.append(pass_test("Monitors", "mon_http_200.respcode", "200"))
+    r.append(pass_test("Monitors", "mon_http_200.httprequest", "HEAD /"))
+    r.append(pass_test("Monitors", "mon_http_200.interval", "10"))
+    r.append(pass_test("Monitors", "mon_tcp_quick.interval", "5"))
+    r.append(pass_test("Monitors", "mon_https_200.secure", "YES"))
+    r.append(pass_test("Monitors", "mon_https_200.recv", "200 OK"))
+
+    # 22. Servers (4 tests)
+    r.append(pass_test("Servers", "srv_host01.ipaddress", "10.0.1.1"))
+    r.append(pass_test("Servers", "srv_host01.state", "ENABLED"))
+    r.append(pass_test("Servers", "srv_opnsense.ipaddress", "10.0.1.2"))
+    r.append(pass_test("Servers", "srv_opnsense.state", "ENABLED"))
+
+    # 23. SNIP (3 tests)
+    snip = "10.0.1.254" if not is_candidate else "10.0.1.253"
+    r.append(pass_test("SNIP", "nsip_snip.type", "SNIP"))
+    r.append(pass_test("SNIP", "nsip_snip.mgmtaccess", "ENABLED"))
+    r.append(pass_test("SNIP", "nsip_snip.ipaddress", snip))
+
+    # Add candidate-only failure: SSL cert binding missing after upgrade
+    if is_candidate:
+        # Replace the passing cert binding test with a failure
+        for i, t in enumerate(r):
+            if t["test"] == "certkey.chain" and t["status"] == "PASS":
+                r[i] = fail_test("Certificates", "certkey.chain", "lab-ca", "NONE",
+                                "REGRESSION: Certificate chain link lost after firmware upgrade — wildcard cert no longer linked to CA")
+                break
+
+    return r
+
+
+def build_json(nsip, hostname, results):
+    passed = sum(1 for t in results if t["status"] == "PASS")
+    failed = sum(1 for t in results if t["status"] == "FAIL")
+    warnings = sum(1 for t in results if t["status"] == "WARN")
+    return {
+        "nsip": nsip,
+        "hostname": hostname,
+        "firmware": "NS14.1" if "baseline" in hostname else "NS14.1",
+        "build": "Build 60.57" if "baseline" in hostname else "Build 65.12",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "total": len(results),
+        "passed": passed,
+        "failed": failed,
+        "warnings": warnings,
+        "results": results,
+    }
+
+
+# ─── Generate CLI diffs ───
+
+def generate_diffs():
+    diffs = {}
+
+    # Expected diff: version/build
+    diffs["show version"] = """--- baseline/show_version.txt
++++ candidate/show_version.txt
+@@ -1,3 +1,3 @@
+ NetScaler NS14.1:
+-  Build 60.57.nc
++  Build 65.12.nc
+   Release date: Mar 01 2026"""
+
+    # Expected diff: hardware serial (different VMs)
+    diffs["show hardware"] = """--- baseline/show_hardware.txt
++++ candidate/show_hardware.txt
+@@ -2,3 +2,3 @@
+  Machine ID:    PLACEHOLDER_ID
+- Serial Number: 7CDE8A3B1F02
++ Serial Number: 9ABF4C7D2E18
+  Encoded serial: ..."""
+
+    # UNEXPECTED diff: SSL default profile setting regression
+    diffs["show ssl parameter"] = """--- baseline/show_ssl_parameter.txt
++++ candidate/show_ssl_parameter.txt
+@@ -4,7 +4,7 @@
+  SSL quantum size: 8 kBytes
+  Max memory usage (MB): 0
+  Session tickets: DISABLED
+- Default Profile: ENABLED
++ Default Profile: ENABLED
+  SSL Interception Max Reuse Sessions: 10
+- Undefaction: CLIENTAUTH
++ Undefaction: RESET
+  FIPS 140-2 Compliance: NO"""
+
+    # UNEXPECTED diff: HTTP/2 max streams reset
+    diffs["show httpprofile http_prof_web"] = """--- baseline/show_httpprofile.txt
++++ candidate/show_httpprofile.txt
+@@ -8,7 +8,7 @@
+  Connection multiplexing: ENABLED
+  WebSocket: ENABLED
+  HTTP/2: ENABLED
+- HTTP/2 Max Concurrent Streams: 128
++ HTTP/2 Max Concurrent Streams: 100
+  HTTP/2 Max Header List Size: 32768
+  Drop invalid requests: ENABLED"""
+
+    return diffs
+
+
+# ─── Generate metrics CSV ───
+
+def generate_metrics():
+    """Simulate ~25 minutes of pipeline execution metrics at 10s intervals."""
+    rows = []
+    start = datetime(2026, 3, 10, 14, 0, 0, tzinfo=timezone.utc)
+
+    for i in range(150):  # 150 samples = 25 minutes
+        ts = start + timedelta(seconds=i * 10)
+        t = i / 150  # normalized time 0-1
+
+        # CPU: spikes during TF apply (t=0.2-0.4, t=0.5-0.7), low during waits
+        if 0.05 < t < 0.15:    # KVM provision
+            cpu = random.uniform(35, 55)
+        elif 0.2 < t < 0.4:    # TF apply baseline
+            cpu = random.uniform(40, 72)
+        elif 0.5 < t < 0.7:    # TF apply candidate
+            cpu = random.uniform(38, 68)
+        elif 0.75 < t < 0.9:   # Tests running
+            cpu = random.uniform(15, 35)
+        else:
+            cpu = random.uniform(5, 15)
+
+        # Memory: gradual climb during deploy, steady during tests
+        mem_base = 42 + t * 18
+        mem = mem_base + random.uniform(-2, 3)
+
+        # Network: bursts during provisioning and tests
+        if 0.05 < t < 0.15 or 0.2 < t < 0.4 or 0.5 < t < 0.7:
+            rx = random.uniform(5, 25)
+            tx = random.uniform(2, 12)
+        elif 0.75 < t < 0.9:
+            rx = random.uniform(3, 15)
+            tx = random.uniform(1, 8)
+        else:
+            rx = random.uniform(0.1, 2)
+            tx = random.uniform(0.1, 1)
+
+        # Disk: step up after QCOW2 copies
+        disk = 45 + (8 if t > 0.1 else 0) + (8 if t > 0.5 else 0) + random.uniform(-0.5, 0.5)
+
+        rows.append({
+            "timestamp": ts.isoformat(),
+            "cpu_pct": f"{cpu:.1f}",
+            "mem_pct": f"{mem:.1f}",
+            "net_rx_mbps": f"{rx:.2f}",
+            "net_tx_mbps": f"{tx:.2f}",
+            "disk_pct": f"{disk:.1f}",
+        })
+
+    return rows
+
+
+# ─── Generate system logs ───
+
+def generate_logs():
+    logs = {}
+
+    logs[("baseline", "nsconfig_audit.txt")] = """2026-03-10 14:05:12  CLI CMD_EXECUTED: set system parameter -minPasswdLen 8
+2026-03-10 14:05:12  CLI CMD_EXECUTED: set system parameter -strongpassword enableall
+2026-03-10 14:05:13  CLI CMD_EXECUTED: enable ns feature LB CS SSL REWRITE RESPONDER CMP AppFlow IC
+2026-03-10 14:05:14  CLI CMD_EXECUTED: enable ns mode FR TCPB Edge L3 ULFD
+2026-03-10 14:05:15  CLI CMD_EXECUTED: set ssl parameter -defaultProfile ENABLED
+2026-03-10 14:06:22  WARM REBOOT initiated by nsroot from 10.0.1.1
+2026-03-10 14:08:45  System started after warm reboot
+2026-03-10 14:09:01  CLI CMD_EXECUTED: add ssl profile ns_default_ssl_profile_frontend
+2026-03-10 14:09:02  CLI CMD_EXECUTED: bind ssl profile ns_default_ssl_profile_frontend -cipherName TLS1.2-AES256-GCM-SHA384
+2026-03-10 14:09:15  CLI CMD_EXECUTED: add cs vserver cs_vsrv_https SSL 10.0.1.105 443
+2026-03-10 14:09:16  CLI CMD_EXECUTED: add cs vserver cs_vsrv_http HTTP 10.0.1.105 80
+2026-03-10 14:09:30  CLI CMD_EXECUTED: save ns config"""
+
+    logs[("candidate", "nsconfig_audit.txt")] = """2026-03-10 14:12:33  CLI CMD_EXECUTED: set system parameter -minPasswdLen 8
+2026-03-10 14:12:33  CLI CMD_EXECUTED: set system parameter -strongpassword enableall
+2026-03-10 14:12:34  CLI CMD_EXECUTED: enable ns feature LB CS SSL REWRITE RESPONDER CMP AppFlow IC
+2026-03-10 14:12:35  CLI CMD_EXECUTED: enable ns mode FR TCPB Edge L3 ULFD
+2026-03-10 14:12:36  CLI CMD_EXECUTED: set ssl parameter -defaultProfile ENABLED
+2026-03-10 14:13:45  WARM REBOOT initiated by nsroot from 10.0.1.1
+2026-03-10 14:16:10  System started after warm reboot
+2026-03-10 14:16:25  CLI CMD_EXECUTED: add ssl profile ns_default_ssl_profile_frontend
+2026-03-10 14:16:26  WARNING: TLS 1.3 configuration may require additional cipher bindings
+2026-03-10 14:16:27  CLI CMD_EXECUTED: bind ssl profile ns_default_ssl_profile_frontend -cipherName TLS1.2-AES256-GCM-SHA384
+2026-03-10 14:16:40  CLI CMD_EXECUTED: add cs vserver cs_vsrv_https SSL 10.0.1.106 443
+2026-03-10 14:16:41  CLI CMD_EXECUTED: add cs vserver cs_vsrv_http HTTP 10.0.1.106 80
+2026-03-10 14:16:55  CLI CMD_EXECUTED: save ns config"""
+
+    logs[("baseline", "ns_log.txt")] = """Mar 10 14:04:55 vpx-baseline kernel: FreeBSD 12.4-RELEASE amd64
+Mar 10 14:05:00 vpx-baseline nsconfigd: Configuration daemon started
+Mar 10 14:05:12 vpx-baseline nsapimgr: REST API session opened from 10.0.1.1
+Mar 10 14:06:22 vpx-baseline nsconfigd: Warm reboot initiated
+Mar 10 14:08:45 vpx-baseline kernel: System resumed after warm reboot
+Mar 10 14:09:01 vpx-baseline nsconfigd: SSL default profile activated
+Mar 10 14:09:30 vpx-baseline nsconfigd: Configuration saved to /nsconfig/ns.conf
+Mar 10 14:20:01 vpx-baseline nsapimgr: NITRO API health check from 10.0.1.1 — 200 OK"""
+
+    logs[("candidate", "ns_log.txt")] = """Mar 10 14:11:55 vpx-candidate kernel: FreeBSD 12.4-RELEASE amd64
+Mar 10 14:12:00 vpx-candidate nsconfigd: Configuration daemon started
+Mar 10 14:12:33 vpx-candidate nsapimgr: REST API session opened from 10.0.1.1
+Mar 10 14:13:45 vpx-candidate nsconfigd: Warm reboot initiated
+Mar 10 14:16:10 vpx-candidate kernel: System resumed after warm reboot
+Mar 10 14:16:25 vpx-candidate nsconfigd: SSL default profile activated
+Mar 10 14:16:26 vpx-candidate nsconfigd: WARNING — http2maxconcurrentstreams reset to firmware default (100)
+Mar 10 14:16:55 vpx-candidate nsconfigd: Configuration saved to /nsconfig/ns.conf
+Mar 10 14:22:01 vpx-candidate nsapimgr: NITRO API health check from 10.0.1.1 — 200 OK"""
+
+    return logs
+
+
+# ═══ Main ═══
+
+# Create directory structure
+os.makedirs(f"{OUT}/diffs", exist_ok=True)
+os.makedirs(f"{OUT}/logs/baseline", exist_ok=True)
+os.makedirs(f"{OUT}/logs/candidate", exist_ok=True)
+
+# Generate test results
+baseline_results = build_results(is_candidate=False)
+candidate_results = build_results(is_candidate=True)
+
+baseline_json = build_json("10.0.1.5", "vpx-baseline", baseline_results)
+candidate_json = build_json("10.0.1.6", "vpx-candidate", candidate_results)
+
+print(f"Baseline:  {baseline_json['total']} tests ({baseline_json['passed']}P / {baseline_json['failed']}F / {baseline_json['warnings']}W)")
+print(f"Candidate: {candidate_json['total']} tests ({candidate_json['passed']}P / {candidate_json['failed']}F / {candidate_json['warnings']}W)")
+
+with open(f"{OUT}/baseline.json", "w") as f:
+    json.dump(baseline_json, f, indent=2)
+with open(f"{OUT}/candidate.json", "w") as f:
+    json.dump(candidate_json, f, indent=2)
+
+# Generate diffs
+diffs = generate_diffs()
+for name, content in diffs.items():
+    filename = name.replace(" ", "_").replace("/", "_") + ".diff"
+    with open(f"{OUT}/diffs/{filename}", "w") as f:
+        f.write(content)
+print(f"Diffs:     {len(diffs)} CLI diff files")
+
+# Generate metrics
+import csv
+metrics = generate_metrics()
+with open(f"{OUT}/metrics.csv", "w", newline="") as f:
+    w = csv.DictWriter(f, fieldnames=["timestamp", "cpu_pct", "mem_pct", "net_rx_mbps", "net_tx_mbps", "disk_pct"])
+    w.writeheader()
+    w.writerows(metrics)
+print(f"Metrics:   {len(metrics)} samples ({len(metrics) * 10 // 60} minutes)")
+
+# Generate logs
+logs = generate_logs()
+for (vpx, filename), content in logs.items():
+    with open(f"{OUT}/logs/{vpx}/{filename}", "w") as f:
+        f.write(content)
+print(f"Logs:      {len(logs)} log files")
+
+print(f"\nAll sample data written to {OUT}/")

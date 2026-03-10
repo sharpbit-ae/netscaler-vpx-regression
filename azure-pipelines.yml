@@ -1,6 +1,10 @@
 trigger: none
 
 parameters:
+  - name: demoMode
+    displayName: "Demo mode (generate sample report without VPX deployment)"
+    type: boolean
+    default: true
   - name: baselineTarball
     displayName: "Baseline firmware tarball path"
     type: string
@@ -38,25 +42,38 @@ stages:
               targetType: inline
               script: |
                 echo "Checking required tools..."
-                for TOOL in virsh mkisofs expect qemu-img terraform curl; do
-                  if command -v "$TOOL" &>/dev/null; then
-                    echo "  [OK] $TOOL ($(command -v "$TOOL"))"
-                  else
-                    echo "  [FAIL] $TOOL not found"
-                    exit 1
-                  fi
-                done
-                echo ""
-                echo "Terraform version:"
-                terraform version
-                echo ""
-                echo "Checking VM storage directory..."
-                df -h $(VM_STORAGE_DIR)
-                echo "Checking network..."
-                sudo virsh net-info opn_wan
+                if [ "${{ parameters.demoMode }}" = "True" ]; then
+                  echo "  [DEMO MODE] Skipping KVM tool checks"
+                  for TOOL in python3 curl; do
+                    if command -v "$TOOL" &>/dev/null; then
+                      echo "  [OK] $TOOL ($(command -v "$TOOL"))"
+                    else
+                      echo "  [FAIL] $TOOL not found"
+                      exit 1
+                    fi
+                  done
+                else
+                  for TOOL in virsh mkisofs expect qemu-img terraform curl; do
+                    if command -v "$TOOL" &>/dev/null; then
+                      echo "  [OK] $TOOL ($(command -v "$TOOL"))"
+                    else
+                      echo "  [FAIL] $TOOL not found"
+                      exit 1
+                    fi
+                  done
+                  echo ""
+                  echo "Terraform version:"
+                  terraform version
+                  echo ""
+                  echo "Checking VM storage directory..."
+                  df -h $(VM_STORAGE_DIR)
+                  echo "Checking network..."
+                  sudo virsh net-info opn_wan
+                fi
 
           - task: Bash@3
             displayName: "Clean up leftover VMs from previous runs"
+            condition: eq('${{ parameters.demoMode }}', 'False')
             inputs:
               targetType: inline
               script: |
@@ -65,6 +82,7 @@ stages:
 
           - task: Bash@3
             displayName: "Decode SSL certificates"
+            condition: eq('${{ parameters.demoMode }}', 'False')
             inputs:
               targetType: inline
               script: |
@@ -86,6 +104,7 @@ stages:
   - stage: DeployBaseline
     displayName: "Phase 2a: Deploy Baseline VPX"
     dependsOn: Setup
+    condition: and(succeeded(), eq('${{ parameters.demoMode }}', 'False'))
     jobs:
       - job: Baseline
         displayName: "Baseline (14.1-60.57)"
@@ -121,6 +140,7 @@ stages:
   - stage: DeployCandidate
     displayName: "Phase 2b: Deploy Candidate VPX"
     dependsOn: Setup
+    condition: and(succeeded(), eq('${{ parameters.demoMode }}', 'False'))
     jobs:
       - job: Candidate
         displayName: "Candidate (14.1-66.54)"
@@ -158,6 +178,14 @@ stages:
     dependsOn:
       - DeployBaseline
       - DeployCandidate
+    condition: |
+      or(
+        and(
+          eq('${{ parameters.demoMode }}', 'False'),
+          succeeded()
+        ),
+        eq('${{ parameters.demoMode }}', 'True')
+      )
     jobs:
       - job: Test
         displayName: "Compare Firmware Outputs"
@@ -166,8 +194,43 @@ stages:
         steps:
           - checkout: self
 
+          # --- DEMO MODE: Generate sample data + report ---
+          - task: Bash@3
+            displayName: "[Demo] Generate sample test data"
+            condition: eq('${{ parameters.demoMode }}', 'True')
+            inputs:
+              targetType: inline
+              script: |
+                echo "╔══════════════════════════════════════════════════════════╗"
+                echo "║  DEMO MODE — Generating sample regression data          ║"
+                echo "║  In production, this stage runs NITRO API tests against  ║"
+                echo "║  two live VPX instances deployed in Stage 2.             ║"
+                echo "╚══════════════════════════════════════════════════════════╝"
+                echo ""
+                python3 scripts/generate-sample-data.py "$(Build.ArtifactStagingDirectory)/regression-output"
+
+          - task: Bash@3
+            displayName: "[Demo] Generate HTML report"
+            condition: eq('${{ parameters.demoMode }}', 'True')
+            inputs:
+              targetType: inline
+              script: |
+                OUT="$(Build.ArtifactStagingDirectory)/regression-output"
+                python3 scripts/generate-html-report.py \
+                  "$OUT/baseline.json" \
+                  "$OUT/candidate.json" \
+                  "$OUT" \
+                  "$OUT" \
+                  "$OUT/logs" \
+                  "$OUT/metrics.csv"
+                echo ""
+                echo "Report generated:"
+                ls -lh "$OUT/regression-report.html"
+
+          # --- LIVE MODE: Run real tests against VPX instances ---
           - task: Bash@3
             displayName: "Run regression comparison"
+            condition: eq('${{ parameters.demoMode }}', 'False')
             inputs:
               targetType: inline
               script: |
@@ -185,7 +248,7 @@ stages:
               publishLocation: Container
 
   # ================================================================
-  # Stage 4: Cleanup (always runs)
+  # Stage 4: Cleanup (always runs, skipped in demo mode)
   # ================================================================
   - stage: Cleanup
     displayName: "Phase 4: Cleanup"
@@ -193,7 +256,7 @@ stages:
       - DeployBaseline
       - DeployCandidate
       - RegressionTest
-    condition: always()
+    condition: and(always(), eq('${{ parameters.demoMode }}', 'False'))
     jobs:
       - job: Cleanup
         displayName: "Remove VMs and Storage"
