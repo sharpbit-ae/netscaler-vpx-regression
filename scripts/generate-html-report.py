@@ -381,7 +381,7 @@ def render_side_by_side_chart(b_probes, c_probes, width=1100, height=440):
         for pi in range(n_pairs):
             px = x_cursor + pi * pair_w + pair_w * 0.08
 
-            # Baseline bar (two-tone: total=light, TTFB=solid)
+            # Baseline bar (two-tone: total=light, TTFB=solid) — blocked requests in red
             if pi < len(b_rows):
                 row = b_rows[pi]
                 ttfb = row.get('time_ttfb_ms', 0)
@@ -391,17 +391,20 @@ def render_side_by_side_chart(b_probes, c_probes, width=1100, height=440):
                 by_total = margin['top'] + plot_h - total_h
                 by_ttfb = margin['top'] + plot_h - ttfb_h
                 status = row.get('http_status', '?')
-                tip = f"Baseline #{row.get('request_num', pi+1)} {sc} | HTTP {status} | TTFB: {fmt_ms(ttfb)}ms | Total: {fmt_ms(total)}ms"
+                is_blocked = row.get('blocked') == 'true'
+                bar_fill = '#ef4444' if is_blocked else b_color
+                blocked_tag = ' | BLOCKED (expected)' if is_blocked else ''
+                tip = f"Baseline #{row.get('request_num', pi+1)} {sc} | HTTP {status}{blocked_tag} | TTFB: {fmt_ms(ttfb)}ms | Total: {fmt_ms(total)}ms"
                 # Light extension for total time
                 if total_h > ttfb_h:
-                    svg.append(f'<rect x="{px:.1f}" y="{by_total:.1f}" width="{bar_w:.1f}" height="{max(0.5, total_h - ttfb_h):.1f}" rx="1" fill="{b_color}" opacity="0.25"/>')
+                    svg.append(f'<rect x="{px:.1f}" y="{by_total:.1f}" width="{bar_w:.1f}" height="{max(0.5, total_h - ttfb_h):.1f}" rx="1" fill="{bar_fill}" opacity="0.25"/>')
                 # Solid bar for TTFB
-                svg.append(f'<rect x="{px:.1f}" y="{by_ttfb:.1f}" width="{bar_w:.1f}" height="{max(0.5, ttfb_h):.1f}" rx="1" fill="{b_color}" opacity="0.85" '
+                svg.append(f'<rect x="{px:.1f}" y="{by_ttfb:.1f}" width="{bar_w:.1f}" height="{max(0.5, ttfb_h):.1f}" rx="1" fill="{bar_fill}" opacity="0.85" '
                            f'onmouseover="this.setAttribute(\'opacity\',\'1\');this.setAttribute(\'stroke\',\'white\');this.setAttribute(\'stroke-width\',\'1\')" '
                            f'onmouseout="this.setAttribute(\'opacity\',\'0.85\');this.removeAttribute(\'stroke\');this.removeAttribute(\'stroke-width\')">'
                            f'<title>{esc(tip)}</title></rect>')
 
-            # Candidate bar (two-tone: total=light, TTFB=solid)
+            # Candidate bar (two-tone: total=light, TTFB=solid) — blocked requests in red
             if pi < len(c_rows):
                 row = c_rows[pi]
                 ttfb = row.get('time_ttfb_ms', 0)
@@ -411,11 +414,14 @@ def render_side_by_side_chart(b_probes, c_probes, width=1100, height=440):
                 by_total = margin['top'] + plot_h - total_h
                 by_ttfb = margin['top'] + plot_h - ttfb_h
                 status = row.get('http_status', '?')
-                tip = f"Candidate #{row.get('request_num', pi+1)} {sc} | HTTP {status} | TTFB: {fmt_ms(ttfb)}ms | Total: {fmt_ms(total)}ms"
+                is_blocked = row.get('blocked') == 'true'
+                bar_fill = '#ef4444' if is_blocked else c_color
+                blocked_tag = ' | BLOCKED (expected)' if is_blocked else ''
+                tip = f"Candidate #{row.get('request_num', pi+1)} {sc} | HTTP {status}{blocked_tag} | TTFB: {fmt_ms(ttfb)}ms | Total: {fmt_ms(total)}ms"
                 cx = px + bar_w + pair_gap
                 if total_h > ttfb_h:
-                    svg.append(f'<rect x="{cx:.1f}" y="{by_total:.1f}" width="{bar_w:.1f}" height="{max(0.5, total_h - ttfb_h):.1f}" rx="1" fill="{c_color}" opacity="0.25"/>')
-                svg.append(f'<rect x="{cx:.1f}" y="{by_ttfb:.1f}" width="{bar_w:.1f}" height="{max(0.5, ttfb_h):.1f}" rx="1" fill="{c_color}" opacity="0.85" '
+                    svg.append(f'<rect x="{cx:.1f}" y="{by_total:.1f}" width="{bar_w:.1f}" height="{max(0.5, total_h - ttfb_h):.1f}" rx="1" fill="{bar_fill}" opacity="0.25"/>')
+                svg.append(f'<rect x="{cx:.1f}" y="{by_ttfb:.1f}" width="{bar_w:.1f}" height="{max(0.5, ttfb_h):.1f}" rx="1" fill="{bar_fill}" opacity="0.85" '
                            f'onmouseover="this.setAttribute(\'opacity\',\'1\');this.setAttribute(\'stroke\',\'white\');this.setAttribute(\'stroke-width\',\'1\')" '
                            f'onmouseout="this.setAttribute(\'opacity\',\'0.85\');this.removeAttribute(\'stroke\');this.removeAttribute(\'stroke-width\')">'
                            f'<title>{esc(tip)}</title></rect>')
@@ -460,7 +466,9 @@ def render_side_by_side_chart(b_probes, c_probes, width=1100, height=440):
     svg.append(f'<text x="{leg_x + 14}" y="{leg_y}" fill="var(--text-dim)" font-size="10" dominant-baseline="middle">Baseline</text>')
     svg.append(f'<rect x="{leg_x + 80}" y="{leg_y - 8}" width="10" height="10" rx="2" fill="{c_color}" opacity="0.85"/>')
     svg.append(f'<text x="{leg_x + 94}" y="{leg_y}" fill="var(--text-dim)" font-size="10" dominant-baseline="middle">Candidate</text>')
-    svg.append(f'<text x="{leg_x + 175}" y="{leg_y}" fill="var(--text-dim)" font-size="9" dominant-baseline="middle">(solid = TTFB, faded = total)</text>')
+    svg.append(f'<rect x="{leg_x + 175}" y="{leg_y - 8}" width="10" height="10" rx="2" fill="#ef4444" opacity="0.85"/>')
+    svg.append(f'<text x="{leg_x + 189}" y="{leg_y}" fill="var(--text-dim)" font-size="10" dominant-baseline="middle">Blocked (expected)</text>')
+    svg.append(f'<text x="{leg_x + 310}" y="{leg_y}" fill="var(--text-dim)" font-size="9" dominant-baseline="middle">(solid = TTFB, faded = total)</text>')
 
     # Title
     b_count = len(b_probes or [])
@@ -917,7 +925,7 @@ footer {{
     # --- HTTP Load Profile Charts (Side-by-Side Comparison) ---
     if b_probes or c_probes:
         html_parts.append('<h2 id="loadprofile">HTTP Load Profile (50 Requests)</h2>\n')
-        html_parts.append('<p style="color:var(--text-dim);margin-bottom:1rem;">50 HTTP requests per VPX — side-by-side comparison of baseline (blue) vs candidate (orange). Grouped by scenario type. Hover bars for timing details.</p>\n')
+        html_parts.append('<p style="color:var(--text-dim);margin-bottom:1rem;">50 HTTP requests per VPX — side-by-side comparison of baseline (cyan) vs candidate (violet). Red bars = blocked by bot responder (expected). Grouped by scenario type. Hover bars for timing details.</p>\n')
 
         # Side-by-side chart
         html_parts.append(render_side_by_side_chart(b_probes, c_probes))
@@ -951,7 +959,7 @@ footer {{
 <div class="summary-grid" style="margin-top:1.5rem;">
     <div class="summary-card"><h3 style="color:#67e8f9">Baseline</h3>
         <div class="stat-row"><span class="stat-label">Requests</span><span class="stat-value">{len(b_probes or [])}</span></div>
-        <div class="stat-row"><span class="stat-label">Blocked</span><span class="stat-value" style="color:var(--red)">{b_blocked}</span></div>
+        <div class="stat-row"><span class="stat-label">Blocked (expected)</span><span class="stat-value" style="color:{'var(--green)' if b_blocked == 10 else 'var(--red)'}">{b_blocked}/10</span></div>
         <div class="stat-row"><span class="stat-label">Avg TTFB</span><span class="stat-value">{fmt_ms(b_avg)}ms</span></div>
         <div class="stat-row"><span class="stat-label">P95 TTFB</span><span class="stat-value">{fmt_ms(b_p95)}ms</span></div>
         <div class="stat-row"><span class="stat-label">Max TTFB</span><span class="stat-value">{fmt_ms(max(b_ttfbs) if b_ttfbs else 0)}ms</span></div>
@@ -959,7 +967,7 @@ footer {{
     </div>
     <div class="summary-card"><h3 style="color:#a78bfa">Candidate</h3>
         <div class="stat-row"><span class="stat-label">Requests</span><span class="stat-value">{len(c_probes or [])}</span></div>
-        <div class="stat-row"><span class="stat-label">Blocked</span><span class="stat-value" style="color:var(--red)">{c_blocked}</span></div>
+        <div class="stat-row"><span class="stat-label">Blocked (expected)</span><span class="stat-value" style="color:{'var(--green)' if c_blocked == 10 else 'var(--red)'}">{c_blocked}/10</span></div>
         <div class="stat-row"><span class="stat-label">Avg TTFB</span><span class="stat-value">{fmt_ms(c_avg)}ms</span></div>
         <div class="stat-row"><span class="stat-label">P95 TTFB</span><span class="stat-value">{fmt_ms(c_p95)}ms</span></div>
         <div class="stat-row"><span class="stat-label">Max TTFB</span><span class="stat-value">{fmt_ms(max(c_ttfbs) if c_ttfbs else 0)}ms</span></div>
@@ -967,7 +975,7 @@ footer {{
     </div>
     <div class="summary-card"><h3>Comparison</h3>
         <div class="stat-row"><span class="stat-label">TTFB Diff</span><span class="stat-value" style="color:{diff_color}">{diff_str}</span></div>
-        <div class="stat-row"><span class="stat-label">Blocked Match</span><span class="stat-value">{"YES" if b_blocked == c_blocked else "NO"}</span></div>
+        <div class="stat-row"><span class="stat-label">Blocked Match</span><span class="stat-value" style="color:{'var(--green)' if b_blocked == c_blocked == 10 else 'var(--red)'}">{"PASS (10/10)" if b_blocked == c_blocked == 10 else f"{'YES' if b_blocked == c_blocked else 'NO'} ({b_blocked} vs {c_blocked})"}</span></div>
         <div class="stat-row"><span class="stat-label">P95 Diff</span><span class="stat-value">{fmt_ms(abs(c_p95 - b_p95))}ms</span></div>
         <div class="stat-row"><span class="stat-label">Max Diff</span><span class="stat-value">{fmt_ms(abs((max(c_ttfbs) if c_ttfbs else 0) - (max(b_ttfbs) if b_ttfbs else 0)))}ms</span></div>
     </div>
