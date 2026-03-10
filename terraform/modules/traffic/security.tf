@@ -26,6 +26,8 @@ resource "citrixadc_csvserver_responderpolicy_binding" "http_redirect" {
 }
 
 # --- Step 10: Security Headers (Response) ---
+# Rule uses "true" instead of "HTTP.RES.IS_VALID" so headers are inserted
+# even when NetScaler generates its own error responses (e.g. 503 backend DOWN).
 
 resource "citrixadc_rewriteaction" "xframe" {
   name   = "rw_act_xframe"
@@ -36,7 +38,7 @@ resource "citrixadc_rewriteaction" "xframe" {
 
 resource "citrixadc_rewritepolicy" "xframe" {
   name   = "rw_pol_security_headers"
-  rule   = "HTTP.RES.IS_VALID"
+  rule   = "true"
   action = citrixadc_rewriteaction.xframe.name
 }
 
@@ -49,7 +51,7 @@ resource "citrixadc_rewriteaction" "nosniff" {
 
 resource "citrixadc_rewritepolicy" "nosniff" {
   name   = "rw_pol_nosniff"
-  rule   = "HTTP.RES.IS_VALID"
+  rule   = "true"
   action = citrixadc_rewriteaction.nosniff.name
 }
 
@@ -62,7 +64,7 @@ resource "citrixadc_rewriteaction" "xss" {
 
 resource "citrixadc_rewritepolicy" "xss" {
   name   = "rw_pol_xss"
-  rule   = "HTTP.RES.IS_VALID"
+  rule   = "true"
   action = citrixadc_rewriteaction.xss.name
 }
 
@@ -75,7 +77,7 @@ resource "citrixadc_rewriteaction" "referrer" {
 
 resource "citrixadc_rewritepolicy" "referrer" {
   name   = "rw_pol_referrer"
-  rule   = "HTTP.RES.IS_VALID"
+  rule   = "true"
   action = citrixadc_rewriteaction.referrer.name
 }
 
@@ -88,7 +90,7 @@ resource "citrixadc_rewriteaction" "permissions" {
 
 resource "citrixadc_rewritepolicy" "permissions" {
   name   = "rw_pol_permissions"
-  rule   = "HTTP.RES.IS_VALID"
+  rule   = "true"
   action = citrixadc_rewriteaction.permissions.name
 }
 
@@ -101,8 +103,21 @@ resource "citrixadc_rewriteaction" "csp" {
 
 resource "citrixadc_rewritepolicy" "csp" {
   name   = "rw_pol_csp"
-  rule   = "HTTP.RES.IS_VALID"
+  rule   = "true"
   action = citrixadc_rewriteaction.csp.name
+}
+
+resource "citrixadc_rewriteaction" "hsts" {
+  name   = "rw_act_hsts"
+  type   = "insert_http_header"
+  target = "Strict-Transport-Security"
+  stringbuilderexpr = "\"max-age=31536000; includeSubDomains; preload\""
+}
+
+resource "citrixadc_rewritepolicy" "hsts" {
+  name   = "rw_pol_hsts"
+  rule   = "true"
+  action = citrixadc_rewriteaction.hsts.name
 }
 
 resource "citrixadc_rewriteaction" "del_server" {
@@ -113,7 +128,7 @@ resource "citrixadc_rewriteaction" "del_server" {
 
 resource "citrixadc_rewritepolicy" "del_server" {
   name   = "rw_pol_del_server"
-  rule   = "HTTP.RES.IS_VALID"
+  rule   = "true"
   action = citrixadc_rewriteaction.del_server.name
 }
 
@@ -125,7 +140,7 @@ resource "citrixadc_rewriteaction" "del_powered" {
 
 resource "citrixadc_rewritepolicy" "del_powered" {
   name   = "rw_pol_del_powered"
-  rule   = "HTTP.RES.IS_VALID"
+  rule   = "true"
   action = citrixadc_rewriteaction.del_powered.name
 }
 
@@ -137,73 +152,92 @@ resource "citrixadc_rewriteaction" "del_aspnet" {
 
 resource "citrixadc_rewritepolicy" "del_aspnet" {
   name   = "rw_pol_del_aspnet"
-  rule   = "HTTP.RES.IS_VALID"
+  rule   = "true"
   action = citrixadc_rewriteaction.del_aspnet.name
 }
 
 # --- Bind response rewrite policies to HTTPS CS vserver ---
+# gotopriorityexpression = "NEXT" ensures ALL policies evaluate in sequence.
+# Without it, evaluation stops after the first match (default: END).
 
 resource "citrixadc_csvserver_rewritepolicy_binding" "xframe" {
-  name       = citrixadc_csvserver.https.name
-  policyname = citrixadc_rewritepolicy.xframe.name
-  priority   = 100
-  bindpoint  = "RESPONSE"
+  name                   = citrixadc_csvserver.https.name
+  policyname             = citrixadc_rewritepolicy.xframe.name
+  priority               = 100
+  bindpoint              = "RESPONSE"
+  gotopriorityexpression = "NEXT"
 }
 
 resource "citrixadc_csvserver_rewritepolicy_binding" "nosniff" {
-  name       = citrixadc_csvserver.https.name
-  policyname = citrixadc_rewritepolicy.nosniff.name
-  priority   = 110
-  bindpoint  = "RESPONSE"
+  name                   = citrixadc_csvserver.https.name
+  policyname             = citrixadc_rewritepolicy.nosniff.name
+  priority               = 110
+  bindpoint              = "RESPONSE"
+  gotopriorityexpression = "NEXT"
 }
 
 resource "citrixadc_csvserver_rewritepolicy_binding" "xss" {
-  name       = citrixadc_csvserver.https.name
-  policyname = citrixadc_rewritepolicy.xss.name
-  priority   = 120
-  bindpoint  = "RESPONSE"
+  name                   = citrixadc_csvserver.https.name
+  policyname             = citrixadc_rewritepolicy.xss.name
+  priority               = 120
+  bindpoint              = "RESPONSE"
+  gotopriorityexpression = "NEXT"
 }
 
 resource "citrixadc_csvserver_rewritepolicy_binding" "referrer" {
-  name       = citrixadc_csvserver.https.name
-  policyname = citrixadc_rewritepolicy.referrer.name
-  priority   = 130
-  bindpoint  = "RESPONSE"
+  name                   = citrixadc_csvserver.https.name
+  policyname             = citrixadc_rewritepolicy.referrer.name
+  priority               = 130
+  bindpoint              = "RESPONSE"
+  gotopriorityexpression = "NEXT"
 }
 
 resource "citrixadc_csvserver_rewritepolicy_binding" "permissions" {
-  name       = citrixadc_csvserver.https.name
-  policyname = citrixadc_rewritepolicy.permissions.name
-  priority   = 140
-  bindpoint  = "RESPONSE"
+  name                   = citrixadc_csvserver.https.name
+  policyname             = citrixadc_rewritepolicy.permissions.name
+  priority               = 140
+  bindpoint              = "RESPONSE"
+  gotopriorityexpression = "NEXT"
 }
 
 resource "citrixadc_csvserver_rewritepolicy_binding" "csp" {
-  name       = citrixadc_csvserver.https.name
-  policyname = citrixadc_rewritepolicy.csp.name
-  priority   = 150
-  bindpoint  = "RESPONSE"
+  name                   = citrixadc_csvserver.https.name
+  policyname             = citrixadc_rewritepolicy.csp.name
+  priority               = 150
+  bindpoint              = "RESPONSE"
+  gotopriorityexpression = "NEXT"
+}
+
+resource "citrixadc_csvserver_rewritepolicy_binding" "hsts" {
+  name                   = citrixadc_csvserver.https.name
+  policyname             = citrixadc_rewritepolicy.hsts.name
+  priority               = 155
+  bindpoint              = "RESPONSE"
+  gotopriorityexpression = "NEXT"
 }
 
 resource "citrixadc_csvserver_rewritepolicy_binding" "del_server" {
-  name       = citrixadc_csvserver.https.name
-  policyname = citrixadc_rewritepolicy.del_server.name
-  priority   = 200
-  bindpoint  = "RESPONSE"
+  name                   = citrixadc_csvserver.https.name
+  policyname             = citrixadc_rewritepolicy.del_server.name
+  priority               = 200
+  bindpoint              = "RESPONSE"
+  gotopriorityexpression = "NEXT"
 }
 
 resource "citrixadc_csvserver_rewritepolicy_binding" "del_powered" {
-  name       = citrixadc_csvserver.https.name
-  policyname = citrixadc_rewritepolicy.del_powered.name
-  priority   = 210
-  bindpoint  = "RESPONSE"
+  name                   = citrixadc_csvserver.https.name
+  policyname             = citrixadc_rewritepolicy.del_powered.name
+  priority               = 210
+  bindpoint              = "RESPONSE"
+  gotopriorityexpression = "NEXT"
 }
 
 resource "citrixadc_csvserver_rewritepolicy_binding" "del_aspnet" {
-  name       = citrixadc_csvserver.https.name
-  policyname = citrixadc_rewritepolicy.del_aspnet.name
-  priority   = 220
-  bindpoint  = "RESPONSE"
+  name                   = citrixadc_csvserver.https.name
+  policyname             = citrixadc_rewritepolicy.del_aspnet.name
+  priority               = 220
+  bindpoint              = "RESPONSE"
+  gotopriorityexpression = "END"
 }
 
 # --- Step 11: Request Headers (XFF, X-Real-IP, etc.) ---
@@ -301,7 +335,7 @@ resource "citrixadc_rewriteaction" "download_options" {
 
 resource "citrixadc_rewritepolicy" "download_options" {
   name   = "rw_pol_download_options"
-  rule   = "HTTP.RES.IS_VALID"
+  rule   = "true"
   action = citrixadc_rewriteaction.download_options.name
 }
 
@@ -314,7 +348,7 @@ resource "citrixadc_rewriteaction" "cross_domain" {
 
 resource "citrixadc_rewritepolicy" "cross_domain" {
   name   = "rw_pol_cross_domain"
-  rule   = "HTTP.RES.IS_VALID"
+  rule   = "true"
   action = citrixadc_rewriteaction.cross_domain.name
 }
 
@@ -400,59 +434,67 @@ resource "citrixadc_rewritepolicy" "cors_maxage" {
 
 # Bind new response headers
 resource "citrixadc_csvserver_rewritepolicy_binding" "download_options" {
-  name       = citrixadc_csvserver.https.name
-  policyname = citrixadc_rewritepolicy.download_options.name
-  priority   = 160
-  bindpoint  = "RESPONSE"
+  name                   = citrixadc_csvserver.https.name
+  policyname             = citrixadc_rewritepolicy.download_options.name
+  priority               = 160
+  bindpoint              = "RESPONSE"
+  gotopriorityexpression = "NEXT"
 }
 
 resource "citrixadc_csvserver_rewritepolicy_binding" "cross_domain" {
-  name       = citrixadc_csvserver.https.name
-  policyname = citrixadc_rewritepolicy.cross_domain.name
-  priority   = 170
-  bindpoint  = "RESPONSE"
+  name                   = citrixadc_csvserver.https.name
+  policyname             = citrixadc_rewritepolicy.cross_domain.name
+  priority               = 170
+  bindpoint              = "RESPONSE"
+  gotopriorityexpression = "NEXT"
 }
 
 resource "citrixadc_csvserver_rewritepolicy_binding" "cache_control" {
-  name       = citrixadc_csvserver.https.name
-  policyname = citrixadc_rewritepolicy.cache_control.name
-  priority   = 180
-  bindpoint  = "RESPONSE"
+  name                   = citrixadc_csvserver.https.name
+  policyname             = citrixadc_rewritepolicy.cache_control.name
+  priority               = 180
+  bindpoint              = "RESPONSE"
+  gotopriorityexpression = "NEXT"
 }
 
 resource "citrixadc_csvserver_rewritepolicy_binding" "cors_origin" {
-  name       = citrixadc_csvserver.https.name
-  policyname = citrixadc_rewritepolicy.cors_origin.name
-  priority   = 250
-  bindpoint  = "RESPONSE"
+  name                   = citrixadc_csvserver.https.name
+  policyname             = citrixadc_rewritepolicy.cors_origin.name
+  priority               = 250
+  bindpoint              = "RESPONSE"
+  gotopriorityexpression = "NEXT"
 }
 
 resource "citrixadc_csvserver_rewritepolicy_binding" "cors_methods" {
-  name       = citrixadc_csvserver.https.name
-  policyname = citrixadc_rewritepolicy.cors_methods.name
-  priority   = 260
-  bindpoint  = "RESPONSE"
+  name                   = citrixadc_csvserver.https.name
+  policyname             = citrixadc_rewritepolicy.cors_methods.name
+  priority               = 260
+  bindpoint              = "RESPONSE"
+  gotopriorityexpression = "NEXT"
 }
 
 resource "citrixadc_csvserver_rewritepolicy_binding" "cors_headers" {
-  name       = citrixadc_csvserver.https.name
-  policyname = citrixadc_rewritepolicy.cors_headers.name
-  priority   = 270
-  bindpoint  = "RESPONSE"
+  name                   = citrixadc_csvserver.https.name
+  policyname             = citrixadc_rewritepolicy.cors_headers.name
+  priority               = 270
+  bindpoint              = "RESPONSE"
+  gotopriorityexpression = "NEXT"
 }
 
 resource "citrixadc_csvserver_rewritepolicy_binding" "cors_credentials" {
-  name       = citrixadc_csvserver.https.name
-  policyname = citrixadc_rewritepolicy.cors_credentials.name
-  priority   = 280
-  bindpoint  = "RESPONSE"
+  name                   = citrixadc_csvserver.https.name
+  policyname             = citrixadc_rewritepolicy.cors_credentials.name
+  priority               = 280
+  bindpoint              = "RESPONSE"
+  gotopriorityexpression = "NEXT"
 }
 
 resource "citrixadc_csvserver_rewritepolicy_binding" "cors_maxage" {
-  name       = citrixadc_csvserver.https.name
-  policyname = citrixadc_rewritepolicy.cors_maxage.name
-  priority   = 290
-  bindpoint  = "RESPONSE"
+  name                   = citrixadc_csvserver.https.name
+  policyname             = citrixadc_rewritepolicy.cors_maxage.name
+  priority               = 290
+  bindpoint              = "RESPONSE"
+  gotopriorityexpression = "END"
 }
 
 # --- CORS Preflight (OPTIONS) fast-path ---

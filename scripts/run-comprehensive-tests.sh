@@ -392,12 +392,12 @@ check_resource "CSPolicies" "csaction/cs_act_web" "targetlbvserver" "lb_vsrv_web
 echo "  [9/20] Security policies..."
 
 # Rewrite actions (security headers + request headers)
-for rw_act in rw_act_xframe rw_act_nosniff rw_act_xss rw_act_referrer rw_act_permissions rw_act_csp rw_act_del_server rw_act_del_powered rw_act_del_aspnet rw_act_xff rw_act_xrealip rw_act_xproto rw_act_reqid rw_act_log_req rw_act_log_res rw_act_download_options rw_act_cross_domain rw_act_cache_control rw_act_cors_origin rw_act_cors_methods rw_act_cors_headers rw_act_cors_credentials rw_act_cors_maxage; do
+for rw_act in rw_act_xframe rw_act_nosniff rw_act_xss rw_act_referrer rw_act_permissions rw_act_csp rw_act_hsts rw_act_del_server rw_act_del_powered rw_act_del_aspnet rw_act_xff rw_act_xrealip rw_act_xproto rw_act_reqid rw_act_log_req rw_act_log_res rw_act_download_options rw_act_cross_domain rw_act_cache_control rw_act_cors_origin rw_act_cors_methods rw_act_cors_headers rw_act_cors_credentials rw_act_cors_maxage; do
     check_resource "Rewrite" "rewriteaction/$rw_act"
 done
 
 # Rewrite policies
-for rw_pol in rw_pol_security_headers rw_pol_nosniff rw_pol_xss rw_pol_referrer rw_pol_permissions rw_pol_csp rw_pol_del_server rw_pol_del_powered rw_pol_del_aspnet rw_pol_xff rw_pol_xrealip rw_pol_xproto rw_pol_reqid rw_pol_log_req rw_pol_log_res rw_pol_download_options rw_pol_cross_domain rw_pol_cache_control rw_pol_cors_origin rw_pol_cors_methods rw_pol_cors_headers rw_pol_cors_credentials rw_pol_cors_maxage; do
+for rw_pol in rw_pol_security_headers rw_pol_nosniff rw_pol_xss rw_pol_referrer rw_pol_permissions rw_pol_csp rw_pol_hsts rw_pol_del_server rw_pol_del_powered rw_pol_del_aspnet rw_pol_xff rw_pol_xrealip rw_pol_xproto rw_pol_reqid rw_pol_log_req rw_pol_log_res rw_pol_download_options rw_pol_cross_domain rw_pol_cache_control rw_pol_cors_origin rw_pol_cors_methods rw_pol_cors_headers rw_pol_cors_credentials rw_pol_cors_maxage; do
     check_resource "Rewrite" "rewritepolicy/$rw_pol"
 done
 
@@ -498,7 +498,7 @@ check_binding "CSBindings" "csvserver_responderpolicy_binding/cs_vsrv_https" "po
 check_binding "CSBindings" "csvserver_responderpolicy_binding/cs_vsrv_http" "policyname" "rs_pol_https_redirect"
 
 # Rewrite policy bindings on HTTPS CS vserver (all response + request headers)
-for rw_pol in rw_pol_security_headers rw_pol_nosniff rw_pol_xss rw_pol_referrer rw_pol_permissions rw_pol_csp rw_pol_del_server rw_pol_del_powered rw_pol_del_aspnet rw_pol_xff rw_pol_xrealip rw_pol_xproto rw_pol_reqid rw_pol_log_req rw_pol_log_res rw_pol_download_options rw_pol_cross_domain rw_pol_cache_control rw_pol_cors_origin rw_pol_cors_methods rw_pol_cors_headers rw_pol_cors_credentials rw_pol_cors_maxage; do
+for rw_pol in rw_pol_security_headers rw_pol_nosniff rw_pol_xss rw_pol_referrer rw_pol_permissions rw_pol_csp rw_pol_hsts rw_pol_del_server rw_pol_del_powered rw_pol_del_aspnet rw_pol_xff rw_pol_xrealip rw_pol_xproto rw_pol_reqid rw_pol_log_req rw_pol_log_res rw_pol_download_options rw_pol_cross_domain rw_pol_cache_control rw_pol_cors_origin rw_pol_cors_methods rw_pol_cors_headers rw_pol_cors_credentials rw_pol_cors_maxage; do
     check_binding "RWBindings" "csvserver_rewritepolicy_binding/cs_vsrv_https" "policyname" "$rw_pol"
 done
 
