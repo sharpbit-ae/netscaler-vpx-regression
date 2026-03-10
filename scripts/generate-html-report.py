@@ -255,6 +255,94 @@ def extract_probe_data(tests):
     return timing, ssl, headers
 
 
+def load_probe_timings(csv_path):
+    """Load probe timing CSV into list of dicts with numeric conversion."""
+    try:
+        import csv as csvmod
+        with open(csv_path) as f:
+            rows = []
+            for row in csvmod.DictReader(f):
+                for k in ('request_num', 'http_status', 'time_connect_ms', 'time_tls_ms', 'time_ttfb_ms', 'time_total_ms'):
+                    try:
+                        row[k] = int(row.get(k, 0))
+                    except (ValueError, TypeError):
+                        row[k] = 0
+                rows.append(row)
+            return rows
+    except Exception as e:
+        print(f"WARNING: Could not load probe timings {csv_path}: {e}", file=sys.stderr)
+        return []
+
+
+def render_probe_bar_chart(probe_data, label, width=900, height=320):
+    """Render an SVG bar chart of 50 request timings, color-coded by scenario."""
+    if not probe_data:
+        return '<p style="color:var(--text-dim)">No probe timing data available.</p>'
+
+    n = len(probe_data)
+    margin = {'top': 20, 'right': 20, 'bottom': 55, 'left': 65}
+    plot_w = width - margin['left'] - margin['right']
+    plot_h = height - margin['top'] - margin['bottom']
+
+    max_ttfb = max((row.get('time_ttfb_ms', 0) for row in probe_data), default=1) or 1
+    max_ttfb = int(max_ttfb * 1.2)  # headroom
+
+    bar_width = max(2, (plot_w / n) - 2)
+    gap = max(1, (plot_w - bar_width * n) / (n + 1))
+
+    colors = {
+        'normal': '#22c55e', 'api': '#3b82f6', 'static': '#a855f7',
+        'redirect': '#f59e0b', 'bot': '#ef4444', 'cors': '#06b6d4',
+        'method': '#f97316', 'burst': '#22c55e',
+    }
+
+    svg = [f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" style="max-width:100%">']
+    svg.append(f'<rect x="{margin["left"]}" y="{margin["top"]}" width="{plot_w}" height="{plot_h}" fill="var(--surface)" rx="4"/>')
+
+    # Grid lines + Y labels
+    for i in range(6):
+        y = margin['top'] + plot_h - (i / 5) * plot_h
+        val = (i / 5) * max_ttfb
+        svg.append(f'<line x1="{margin["left"]}" y1="{y:.1f}" x2="{margin["left"] + plot_w}" y2="{y:.1f}" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="4,4"/>')
+        svg.append(f'<text x="{margin["left"] - 8}" y="{y:.1f}" text-anchor="end" fill="var(--text-dim)" font-size="9" dominant-baseline="middle">{val:.0f}</text>')
+
+    svg.append(f'<text x="14" y="{margin["top"] + plot_h / 2}" text-anchor="middle" fill="var(--text-dim)" font-size="10" transform="rotate(-90, 14, {margin["top"] + plot_h / 2})">TTFB (ms)</text>')
+
+    # Bars
+    for i, row in enumerate(probe_data):
+        x = margin['left'] + gap + i * (bar_width + gap)
+        ttfb = row.get('time_ttfb_ms', 0)
+        bar_h = (ttfb / max_ttfb) * plot_h if max_ttfb > 0 else 0
+        y = margin['top'] + plot_h - bar_h
+        scenario = row.get('scenario', 'normal')
+        color = colors.get(scenario, '#94a3b8')
+        status = row.get('http_status', '?')
+        ua_short = str(row.get('user_agent', ''))[:30]
+        tip = f"#{row.get('request_num', i + 1)} {scenario} | {row.get('host', '')} {row.get('method', 'GET')} | HTTP {status} | TTFB: {ttfb}ms | Total: {row.get('time_total_ms', 0)}ms | UA: {ua_short}"
+
+        svg.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_width:.1f}" height="{bar_h:.1f}" rx="1" fill="{color}" opacity="0.85"><title>{esc(tip)}</title></rect>')
+
+    # X-axis labels (every 5th)
+    for i in range(0, n, 5):
+        x = margin['left'] + gap + i * (bar_width + gap) + bar_width / 2
+        svg.append(f'<text x="{x:.1f}" y="{height - 30}" text-anchor="middle" fill="var(--text-dim)" font-size="9">#{i + 1}</text>')
+
+    # Legend
+    legend_y = height - 10
+    legend_items = [('normal', 'Normal'), ('api', 'API'), ('static', 'Static'),
+                    ('redirect', 'Redirect'), ('bot', 'Bot (blocked)'), ('cors', 'CORS'),
+                    ('method', 'Methods'), ('burst', 'Burst')]
+    lx = margin['left']
+    for sc, lbl in legend_items:
+        c = colors.get(sc, '#94a3b8')
+        svg.append(f'<rect x="{lx}" y="{legend_y - 8}" width="10" height="10" rx="2" fill="{c}"/>')
+        svg.append(f'<text x="{lx + 14}" y="{legend_y}" fill="var(--text-dim)" font-size="9">{lbl}</text>')
+        lx += len(lbl) * 6 + 28
+
+    svg.append('</svg>')
+    return '\n'.join(svg)
+
+
 def render_test_table(results, label):
     """Render a table of test results."""
     if not results:
@@ -278,7 +366,7 @@ def render_test_table(results, label):
 </tbody></table>'''
 
 
-def generate_html(baseline_tests, candidate_tests, regression_dir, output_path, logs_dir=None, metrics_csv=None):
+def generate_html(baseline_tests, candidate_tests, regression_dir, output_path, logs_dir=None, metrics_csv=None, baseline_json_path=None, candidate_json_path=None):
     now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
 
     # Load host resource metrics
@@ -505,6 +593,7 @@ footer {{
         <li><a href="#charts">Category Breakdown</a></li>
         <li><a href="#failures">Failures &amp; Warnings</a></li>
         <li><a href="#probing">HTTP Probing</a></li>
+        <li><a href="#loadprofile">Load Profile (50 Requests)</a></li>
         <li><a href="#diffs">CLI Differences</a></li>
         <li><a href="#resources">Resource Usage</a></li>
         <li><a href="#passed">Passed Tests</a></li>
@@ -594,6 +683,17 @@ footer {{
             html_parts.append(f'<div id="fail-candidate" class="tab-panel{active}" data-group="failures">\n')
             html_parts.append(render_test_table(c_failures, "Candidate"))
             html_parts.append('</div>\n')
+
+    # --- Load probe timing CSVs ---
+    b_probe_csv = baseline_json_path.replace('.json', '-probe-timings.csv') if baseline_json_path else ''
+    c_probe_csv = candidate_json_path.replace('.json', '-probe-timings.csv') if candidate_json_path else ''
+    # Also check output dir for sample data naming convention
+    if not os.path.exists(b_probe_csv):
+        b_probe_csv = os.path.join(os.path.dirname(output_path), 'baseline-probe-timings.csv')
+    if not os.path.exists(c_probe_csv):
+        c_probe_csv = os.path.join(os.path.dirname(output_path), 'candidate-probe-timings.csv')
+    b_probes = load_probe_timings(b_probe_csv) if os.path.exists(b_probe_csv) else []
+    c_probes = load_probe_timings(c_probe_csv) if os.path.exists(c_probe_csv) else []
 
     # --- HTTP Probing Section ---
     b_timing, b_ssl, b_headers = extract_probe_data(baseline_tests)
@@ -685,6 +785,99 @@ footer {{
                     html_parts.append('<td style="color:var(--text-dim)">N/A</td>')
                 html_parts.append('</tr>\n')
             html_parts.append('</tbody></table>\n')
+
+    # --- HTTP Load Profile Charts ---
+    if b_probes or c_probes:
+        html_parts.append('<h2 id="loadprofile">HTTP Load Profile (50 Requests)</h2>\n')
+        html_parts.append('<p style="color:var(--text-dim);margin-bottom:1rem;">50 HTTP requests per VPX — mix of normal browsing, API calls, bot user-agents (should be blocked), CORS preflight, HTTP methods, and burst traffic. Hover over bars for details.</p>\n')
+
+        html_parts.append('<div class="tab-group" data-group="probes">')
+        if b_probes:
+            html_parts.append('    <div class="tab active" onclick="switchTab(\'probes\', \'probe-baseline\')">Baseline</div>')
+        if c_probes:
+            active = '' if b_probes else ' active'
+            html_parts.append(f'    <div class="tab{active}" onclick="switchTab(\'probes\', \'probe-candidate\')">Candidate</div>')
+        html_parts.append('</div>')
+
+        if b_probes:
+            html_parts.append(f'<div id="probe-baseline" class="tab-panel active" data-group="probes">\n')
+            html_parts.append(render_probe_bar_chart(b_probes, "Baseline"))
+
+            # Stats summary
+            b_ttfbs = [r['time_ttfb_ms'] for r in b_probes]
+            b_blocked = sum(1 for r in b_probes if r.get('blocked') == 'true')
+            b_totals = [r['time_total_ms'] for r in b_probes]
+            sorted_ttfb = sorted(b_ttfbs)
+            p95 = sorted_ttfb[int(len(sorted_ttfb) * 0.95)] if sorted_ttfb else 0
+            html_parts.append(f'''
+<div class="summary-grid" style="margin-top:1rem;">
+    <div class="summary-card"><h3>Requests</h3>
+        <div class="stat-row"><span class="stat-label">Total</span><span class="stat-value">{len(b_probes)}</span></div>
+        <div class="stat-row"><span class="stat-label">Blocked (bot)</span><span class="stat-value" style="color:var(--red)">{b_blocked}</span></div>
+        <div class="stat-row"><span class="stat-label">Successful</span><span class="stat-value" style="color:var(--green)">{len(b_probes) - b_blocked}</span></div>
+    </div>
+    <div class="summary-card"><h3>TTFB</h3>
+        <div class="stat-row"><span class="stat-label">Average</span><span class="stat-value">{sum(b_ttfbs) // len(b_ttfbs) if b_ttfbs else 0}ms</span></div>
+        <div class="stat-row"><span class="stat-label">P95</span><span class="stat-value">{p95}ms</span></div>
+        <div class="stat-row"><span class="stat-label">Max</span><span class="stat-value">{max(b_ttfbs) if b_ttfbs else 0}ms</span></div>
+        <div class="stat-row"><span class="stat-label">Min</span><span class="stat-value">{min(b_ttfbs) if b_ttfbs else 0}ms</span></div>
+    </div>
+    <div class="summary-card"><h3>Total Time</h3>
+        <div class="stat-row"><span class="stat-label">Average</span><span class="stat-value">{sum(b_totals) // len(b_totals) if b_totals else 0}ms</span></div>
+        <div class="stat-row"><span class="stat-label">Max</span><span class="stat-value">{max(b_totals) if b_totals else 0}ms</span></div>
+    </div>
+</div>''')
+            html_parts.append('</div>\n')
+
+        if c_probes:
+            active = '' if b_probes else ' active'
+            html_parts.append(f'<div id="probe-candidate" class="tab-panel{active}" data-group="probes">\n')
+            html_parts.append(render_probe_bar_chart(c_probes, "Candidate"))
+
+            c_ttfbs = [r['time_ttfb_ms'] for r in c_probes]
+            c_blocked = sum(1 for r in c_probes if r.get('blocked') == 'true')
+            c_totals = [r['time_total_ms'] for r in c_probes]
+            sorted_c = sorted(c_ttfbs)
+            p95c = sorted_c[int(len(sorted_c) * 0.95)] if sorted_c else 0
+
+            # Comparison with baseline
+            if b_probes:
+                b_avg = sum(b_ttfbs) // len(b_ttfbs) if b_ttfbs else 0
+                c_avg = sum(c_ttfbs) // len(c_ttfbs) if c_ttfbs else 0
+                diff = c_avg - b_avg
+                diff_pct = (diff / b_avg * 100) if b_avg > 0 else 0
+                if diff > 0:
+                    diff_str = f'+{diff}ms ({diff_pct:+.0f}%)'
+                    diff_color = 'var(--red)'
+                elif diff < 0:
+                    diff_str = f'{diff}ms ({diff_pct:+.0f}%)'
+                    diff_color = 'var(--green)'
+                else:
+                    diff_str = 'identical'
+                    diff_color = 'var(--text)'
+            else:
+                diff_str = 'N/A'
+                diff_color = 'var(--text-dim)'
+
+            html_parts.append(f'''
+<div class="summary-grid" style="margin-top:1rem;">
+    <div class="summary-card"><h3>Requests</h3>
+        <div class="stat-row"><span class="stat-label">Total</span><span class="stat-value">{len(c_probes)}</span></div>
+        <div class="stat-row"><span class="stat-label">Blocked (bot)</span><span class="stat-value" style="color:var(--red)">{c_blocked}</span></div>
+        <div class="stat-row"><span class="stat-label">Successful</span><span class="stat-value" style="color:var(--green)">{len(c_probes) - c_blocked}</span></div>
+    </div>
+    <div class="summary-card"><h3>TTFB</h3>
+        <div class="stat-row"><span class="stat-label">Average</span><span class="stat-value">{sum(c_ttfbs) // len(c_ttfbs) if c_ttfbs else 0}ms</span></div>
+        <div class="stat-row"><span class="stat-label">P95</span><span class="stat-value">{p95c}ms</span></div>
+        <div class="stat-row"><span class="stat-label">Max</span><span class="stat-value">{max(c_ttfbs) if c_ttfbs else 0}ms</span></div>
+        <div class="stat-row"><span class="stat-label">Min</span><span class="stat-value">{min(c_ttfbs) if c_ttfbs else 0}ms</span></div>
+    </div>
+    <div class="summary-card"><h3>vs Baseline</h3>
+        <div class="stat-row"><span class="stat-label">TTFB Diff</span><span class="stat-value" style="color:{diff_color}">{diff_str}</span></div>
+        <div class="stat-row"><span class="stat-label">Blocked Match</span><span class="stat-value">{"YES" if b_probes and sum(1 for r in b_probes if r.get("blocked")=="true") == c_blocked else "NO"}</span></div>
+    </div>
+</div>''')
+            html_parts.append('</div>\n')
 
     # --- CLI Differences Section ---
     html_parts.append('<h2 id="diffs">CLI Differences</h2>\n')
@@ -870,4 +1063,4 @@ if __name__ == '__main__':
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, 'regression-report.html')
 
-    generate_html(baseline_data, candidate_data, regression_dir, output_path, logs_dir, metrics_csv)
+    generate_html(baseline_data, candidate_data, regression_dir, output_path, logs_dir, metrics_csv, baseline_json, candidate_json)

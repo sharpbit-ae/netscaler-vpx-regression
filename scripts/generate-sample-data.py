@@ -537,6 +537,77 @@ Mar 10 14:22:01 vpx-candidate nsapimgr: NITRO API health check from 10.0.1.1 —
     return logs
 
 
+# ─── Generate probe timing CSV (50 requests) ───
+
+def generate_probe_timings(is_candidate=False):
+    """Generate 50 HTTP probe timing records for the bar chart."""
+    rows = []
+    scenarios = []
+
+    # 1-10: Normal browsing
+    for _ in range(10):
+        scenarios.append(("normal", "app.lab.local", "GET", "Mozilla/5.0 Chrome/122.0", "https"))
+    # 11-15: API
+    for _ in range(5):
+        scenarios.append(("api", "api.lab.local", "GET", "Mozilla/5.0 Chrome/122.0", "https"))
+    # 16-20: Static
+    for _ in range(5):
+        scenarios.append(("static", "static.lab.local", "GET", "Mozilla/5.0 Chrome/122.0", "https"))
+    # 21-25: Redirect
+    for _ in range(5):
+        scenarios.append(("redirect", "app.lab.local", "GET", "Mozilla/5.0 Chrome/122.0", "http"))
+    # 26-35: Bot (blocked)
+    for ua in ["sqlmap/1.6", "nikto/2.1.6", "Nmap Scripting Engine", "nuclei/2.9.4",
+               "masscan/1.3.2", "DirBuster-1.0", "gobuster/3.5",
+               "python-requests/2.31.0", "ZmEu", "WPScan v3.8"]:
+        scenarios.append(("bot", "app.lab.local", "GET", ua, "https"))
+    # 36-38: CORS
+    for _ in range(3):
+        scenarios.append(("cors", "app.lab.local", "OPTIONS", "Mozilla/5.0 Chrome/122.0", "https"))
+    # 39-42: Methods
+    for m in ["POST", "PUT", "DELETE", "PATCH"]:
+        scenarios.append(("method", "app.lab.local", m, "Mozilla/5.0 Chrome/122.0", "https"))
+    # 43-50: Burst
+    for _ in range(8):
+        scenarios.append(("burst", "app.lab.local", "GET", "Mozilla/5.0 Chrome/122.0", "https"))
+
+    for i, (scenario, host, method, ua, scheme) in enumerate(scenarios):
+        if scenario == "bot":
+            status, connect, tls = 403, random.randint(8, 15), random.randint(30, 50)
+            ttfb = random.randint(10, 25)
+            total = ttfb + random.randint(1, 5)
+            blocked = True
+        elif scenario == "redirect":
+            status, connect, tls = 301, random.randint(8, 15), 0
+            ttfb = random.randint(8, 20)
+            total = ttfb + random.randint(1, 3)
+            blocked = False
+        elif scenario == "cors":
+            status, connect, tls = 200, random.randint(8, 15), random.randint(30, 50)
+            ttfb = random.randint(12, 30)
+            total = ttfb + random.randint(2, 5)
+            blocked = False
+        else:
+            status, connect = 200, random.randint(8, 18)
+            tls = random.randint(30, 55)
+            if is_candidate:
+                ttfb = random.randint(80, 180)
+                total = ttfb + random.randint(5, 30)
+            else:
+                ttfb = random.randint(50, 120)
+                total = ttfb + random.randint(3, 20)
+            blocked = False
+
+        rows.append({
+            "request_num": i + 1, "scenario": scenario, "host": host,
+            "method": method, "user_agent": ua, "http_status": status,
+            "time_connect_ms": connect, "time_tls_ms": tls,
+            "time_ttfb_ms": ttfb, "time_total_ms": total,
+            "blocked": str(blocked).lower(),
+        })
+    return rows
+
+
 # ═══ Main ═══
 
 # Create directory structure
@@ -582,5 +653,20 @@ for (vpx, filename), content in logs.items():
     with open(f"{OUT}/logs/{vpx}/{filename}", "w") as f:
         f.write(content)
 print(f"Logs:      {len(logs)} log files")
+
+# Generate probe timing CSVs (50 requests each)
+probe_fields = ["request_num", "scenario", "host", "method", "user_agent",
+                "http_status", "time_connect_ms", "time_tls_ms",
+                "time_ttfb_ms", "time_total_ms", "blocked"]
+for label, is_cand in [("baseline", False), ("candidate", True)]:
+    probe_rows = generate_probe_timings(is_candidate=is_cand)
+    probe_path = f"{OUT}/{label}-probe-timings.csv"
+    with open(probe_path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=probe_fields)
+        w.writeheader()
+        w.writerows(probe_rows)
+    blocked = sum(1 for r in probe_rows if r["blocked"] == "true")
+    avg_ttfb = sum(r["time_ttfb_ms"] for r in probe_rows) // len(probe_rows)
+    print(f"Probes:    {label}: {len(probe_rows)} requests, {blocked} blocked, avg TTFB {avg_ttfb}ms")
 
 print(f"\nAll sample data written to {OUT}/")

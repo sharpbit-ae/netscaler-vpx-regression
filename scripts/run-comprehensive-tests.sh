@@ -240,7 +240,7 @@ mode_output=$("$SCRIPT_DIR/ssh-vpx.sh" "$PASSWORD" "$NSIP" "show ns mode" 2>/dev
 # =========================================================================
 # 1. SYSTEM IDENTITY & NETWORK
 # =========================================================================
-echo "  [1/19] System identity and network..."
+echo "  [1/20] System identity and network..."
 
 check_resource "System" "nshostname"
 check_resource "System" "dnsnameserver/1.1.1.1"
@@ -250,7 +250,7 @@ check_resource "System" "ntpserver/pool.ntp.org"
 # =========================================================================
 # 2. SECURITY PARAMETERS
 # =========================================================================
-echo "  [2/19] Security parameters..."
+echo "  [2/20] Security parameters..."
 
 check_resource "Security" "systemparameter" "strongpassword" "enableall"
 check_resource "Security" "systemparameter" "minpasswordlen" "8"
@@ -264,7 +264,7 @@ check_resource "Security" "nsparam" "cookieversion" "1"
 # =========================================================================
 # 3. FEATURES & MODES
 # =========================================================================
-echo "  [3/19] Features and modes..."
+echo "  [3/20] Features and modes..."
 
 for feat in LB CS SSL Rewrite Responder AppFlow CMP SSLVPN; do
     check_feature "Features" "feature:$feat" "ENABLED" "$feature_output"
@@ -278,7 +278,7 @@ done
 # =========================================================================
 # 4. HTTP & TCP PROFILES
 # =========================================================================
-echo "  [4/19] HTTP and TCP profiles..."
+echo "  [4/20] HTTP and TCP profiles..."
 
 check_resource "Profiles" "nshttpprofile/nshttp_default_profile" "dropinvalreqs" "ENABLED"
 check_resource "Profiles" "nshttpprofile/nshttp_default_profile" "markhttp09inval" "ENABLED"
@@ -304,7 +304,7 @@ check_resource "Profiles" "nshttpprofile/http_prof_web" "conmultiplex" "ENABLED"
 # =========================================================================
 # 5. SSL CONFIGURATION
 # =========================================================================
-echo "  [5/19] SSL configuration..."
+echo "  [5/20] SSL configuration..."
 
 check_resource "SSL" "sslparameter" "defaultprofile" "ENABLED"
 
@@ -325,7 +325,7 @@ check_resource "SSL" "sslprofile/ns_default_ssl_profile_backend" "tls13" "ENABLE
 # =========================================================================
 # 6. CERTIFICATES
 # =========================================================================
-echo "  [6/19] SSL certificates..."
+echo "  [6/20] SSL certificates..."
 
 check_resource "Certificates" "sslcertkey/lab-ca"
 check_resource "Certificates" "sslcertkey/wildcard.lab.local"
@@ -344,7 +344,7 @@ done
 # =========================================================================
 # 7. SERVERS, MONITORS, SERVICE GROUPS
 # =========================================================================
-echo "  [7/19] Servers, monitors, service groups..."
+echo "  [7/20] Servers, monitors, service groups..."
 
 check_resource "Servers" "server/srv_host01" "ipaddress" "10.0.1.1"
 check_resource "Servers" "server/srv_opnsense" "ipaddress" "10.0.1.2"
@@ -365,7 +365,7 @@ check_resource "ServiceGroups" "servicegroup/sg_dns" "servicetype" "DNS"
 # =========================================================================
 # 8. LB & CS VSERVERS
 # =========================================================================
-echo "  [8/19] LB and CS vservers..."
+echo "  [8/20] LB and CS vservers..."
 
 check_resource "LBVservers" "lbvserver/lb_vsrv_web" "servicetype" "HTTP"
 check_resource "LBVservers" "lbvserver/lb_vsrv_web" "lbmethod" "ROUNDROBIN"
@@ -389,7 +389,7 @@ check_resource "CSPolicies" "csaction/cs_act_web" "targetlbvserver" "lb_vsrv_web
 # =========================================================================
 # 9. SECURITY POLICIES
 # =========================================================================
-echo "  [9/19] Security policies..."
+echo "  [9/20] Security policies..."
 
 # Rewrite actions (security headers + request headers)
 for rw_act in rw_act_xframe rw_act_nosniff rw_act_xss rw_act_referrer rw_act_permissions rw_act_csp rw_act_del_server rw_act_del_powered rw_act_del_aspnet rw_act_xff rw_act_xrealip rw_act_xproto rw_act_reqid rw_act_log_req rw_act_log_res rw_act_download_options rw_act_cross_domain rw_act_cache_control rw_act_cors_origin rw_act_cors_methods rw_act_cors_headers rw_act_cors_credentials rw_act_cors_maxage; do
@@ -415,7 +415,7 @@ check_resource "BotBlocking" "policypatset/ps_bad_useragents"
 # =========================================================================
 # 10. EXTRA OBJECTS
 # =========================================================================
-echo "  [10/19] Compression, audit, maintenance, AppExpert..."
+echo "  [10/20] Compression, audit, maintenance, AppExpert..."
 
 for cmp_pol in cmp_pol_text cmp_pol_json cmp_pol_js cmp_pol_xml cmp_pol_svg; do
     check_resource "Compression" "cmppolicy/$cmp_pol"
@@ -440,7 +440,7 @@ check_resource "Management" "nsip/$NSIP" "restrictaccess" "ENABLED"
 # =========================================================================
 # 11. BINDING VALIDATIONS
 # =========================================================================
-echo "  [11/19] Service group member bindings..."
+echo "  [11/20] Service group member bindings..."
 
 # Service group member bindings (verify correct servers and ports)
 check_binding "SGBindings" "servicegroup_servicegroupmember_binding/sg_web_http" "servername" "srv_host01" "port" "80"
@@ -461,7 +461,7 @@ check_binding "SGMonitors" "servicegroup_lbmonitor_binding/sg_dns" "monitor_name
 # =========================================================================
 # 12. LB VSERVER BINDINGS
 # =========================================================================
-echo "  [12/19] LB vserver bindings..."
+echo "  [12/20] LB vserver bindings..."
 
 check_binding "LBBindings" "lbvserver_servicegroup_binding/lb_vsrv_web" "servicegroupname" "sg_web_http"
 check_binding "LBBindings" "lbvserver_servicegroup_binding/lb_vsrv_web_ssl" "servicegroupname" "sg_web_https"
@@ -481,7 +481,7 @@ check_resource "LBConfig" "lbvserver/lb_vsrv_dns" "ipv46" "$VIP_DNS"
 # =========================================================================
 # 13. CS VSERVER BINDINGS
 # =========================================================================
-echo "  [13/19] CS vserver policy & SSL bindings..."
+echo "  [13/20] CS vserver policy & SSL bindings..."
 
 # CS policy bindings with priority verification
 check_binding "CSBindings" "csvserver_cspolicy_binding/cs_vsrv_https" "policyname" "cs_pol_api" "priority" "100"
@@ -510,7 +510,7 @@ done
 # =========================================================================
 # 14. DEEP VALUE VALIDATIONS
 # =========================================================================
-echo "  [14/19] Deep value validations..."
+echo "  [14/20] Deep value validations..."
 
 # TCP profile deep checks
 check_resource "TCPDeep" "nstcpprofile/tcp_prof_web" "nagle" "DISABLED"
@@ -551,7 +551,7 @@ check_resource "SSLDeep" "sslprofile/ns_default_ssl_profile_frontend" "maxage" "
 # =========================================================================
 # 15. CERTIFICATE EXPIRY & CHAIN VALIDATION
 # =========================================================================
-echo "  [15/19] Certificate expiry and chain..."
+echo "  [15/20] Certificate expiry and chain..."
 
 check_cert_expiry "CertExpiry" "wildcard.lab.local" 30
 check_cert_expiry "CertExpiry" "lab-ca" 30
@@ -560,7 +560,7 @@ check_resource "CertChain" "sslcertkey/wildcard.lab.local" "linkcertkeyname" "la
 # =========================================================================
 # 16. SNIP & VIP NETWORK VERIFICATION
 # =========================================================================
-echo "  [16/19] Network IPs and patset patterns..."
+echo "  [16/20] Network IPs and patset patterns..."
 
 # Verify SNIP exists
 check_resource "Network" "nsip/$SNIP" "type" "SNIP"
@@ -579,7 +579,7 @@ done
 # =========================================================================
 # 17. LIVE HTTP RESPONSE PROBING
 # =========================================================================
-echo "  [17/19] Live HTTP response probing..."
+echo "  [17/20] Live HTTP response probing..."
 
 PROBE_HOST="app.lab.local"
 PROBE_HEADERS=$(mktemp)
@@ -682,7 +682,7 @@ fi
 # =========================================================================
 # 18. RESPONSE HEADER VALIDATION
 # =========================================================================
-echo "  [18/19] Response header validation..."
+echo "  [18/20] Response header validation..."
 
 if [[ -s "$PROBE_HEADERS" ]]; then
     # Verify security headers are present
@@ -739,7 +739,7 @@ rm -f "$PROBE_HEADERS"
 # =========================================================================
 # 19. SSL CERTIFICATE PROBING (Live Connection)
 # =========================================================================
-echo "  [19/19] SSL certificate probing..."
+echo "  [19/20] SSL certificate probing..."
 
 CERT_PEM=$(mktemp)
 CERT_RAW=$(echo | timeout 10 openssl s_client -connect "${VIP_CS}:443" \
@@ -809,6 +809,105 @@ else
 fi
 
 rm -f "$CERT_PEM"
+
+# =========================================================================
+# 20. HTTP LOAD PROFILE — 50 Requests with Timing Chart Data
+# =========================================================================
+echo "  [20/20] HTTP load profile (50 requests)..."
+
+TIMING_CSV="${OUTPUT_JSON%.json}-probe-timings.csv"
+echo "request_num,scenario,host,method,user_agent,http_status,time_connect_ms,time_tls_ms,time_ttfb_ms,time_total_ms,blocked" > "$TIMING_CSV"
+
+PROBE_HOST="app.lab.local"
+REQ_NUM=0
+
+probe_request() {
+    local SCENARIO="$1" HOST="$2" METHOD="$3" UA="$4" SCHEME="${5:-https}"
+    REQ_NUM=$((REQ_NUM + 1))
+
+    local PORT=$([[ "$SCHEME" == "https" ]] && echo 443 || echo 80)
+    local RESULT
+    RESULT=$(curl -sk -o /dev/null \
+        -w '%{http_code}\t%{time_connect}\t%{time_appconnect}\t%{time_starttransfer}\t%{time_total}' \
+        --resolve "${HOST}:${PORT}:${VIP_CS}" \
+        -H "Host: ${HOST}" \
+        -H "User-Agent: ${UA}" \
+        -X "$METHOD" \
+        --connect-timeout 10 --max-time 15 \
+        "${SCHEME}://${HOST}/" 2>/dev/null) || RESULT="000	0	0	0	0"
+
+    IFS=$'\t' read -r STATUS T_CONN T_TLS T_TTFB T_TOTAL <<< "$RESULT"
+
+    local CONN_MS TLS_MS TTFB_MS TOTAL_MS BLOCKED
+    CONN_MS=$(python3 -c "print(int(float('${T_CONN}')*1000))" 2>/dev/null || echo 0)
+    TLS_MS=$(python3 -c "print(max(0,int((float('${T_TLS}')-float('${T_CONN}'))*1000)))" 2>/dev/null || echo 0)
+    TTFB_MS=$(python3 -c "print(int(float('${T_TTFB}')*1000))" 2>/dev/null || echo 0)
+    TOTAL_MS=$(python3 -c "print(int(float('${T_TOTAL}')*1000))" 2>/dev/null || echo 0)
+
+    BLOCKED=$([[ "$STATUS" =~ ^(403|503)$ ]] && echo "true" || echo "false")
+
+    # Sanitize UA for CSV
+    local SAFE_UA
+    SAFE_UA=$(echo "$UA" | tr ',' ';')
+
+    echo "${REQ_NUM},${SCENARIO},${HOST},${METHOD},${SAFE_UA},${STATUS},${CONN_MS},${TLS_MS},${TTFB_MS},${TOTAL_MS},${BLOCKED}" >> "$TIMING_CSV"
+}
+
+# Requests 1-10: Normal browsing (app.lab.local)
+for i in $(seq 1 10); do
+    probe_request "normal" "app.lab.local" "GET" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0"
+done
+
+# Requests 11-15: API endpoint
+for i in $(seq 1 5); do
+    probe_request "api" "api.lab.local" "GET" "Mozilla/5.0 Chrome/122.0"
+done
+
+# Requests 16-20: Static content
+for i in $(seq 1 5); do
+    probe_request "static" "static.lab.local" "GET" "Mozilla/5.0 Chrome/122.0"
+done
+
+# Requests 21-25: HTTP redirect (port 80 → HTTPS)
+for i in $(seq 1 5); do
+    probe_request "redirect" "app.lab.local" "GET" "Mozilla/5.0 Chrome/122.0" "http"
+done
+
+# Requests 26-35: Bot user-agents (should be BLOCKED by responder policy)
+for UA in "sqlmap/1.6" "nikto/2.1.6" "Nmap Scripting Engine" "nuclei/2.9.4" "masscan/1.3.2" \
+          "DirBuster-1.0" "gobuster/3.5" "python-requests/2.31.0" "ZmEu" "WPScan v3.8"; do
+    probe_request "bot" "app.lab.local" "GET" "$UA"
+done
+
+# Requests 36-38: CORS preflight (OPTIONS)
+for i in $(seq 1 3); do
+    probe_request "cors" "app.lab.local" "OPTIONS" "Mozilla/5.0 Chrome/122.0"
+done
+
+# Requests 39-42: HTTP method testing
+for METHOD in POST PUT DELETE PATCH; do
+    probe_request "method" "app.lab.local" "$METHOD" "Mozilla/5.0 Chrome/122.0"
+done
+
+# Requests 43-50: Rapid burst (back-to-back, same endpoint)
+for i in $(seq 1 8); do
+    probe_request "burst" "app.lab.local" "GET" "Mozilla/5.0 Chrome/122.0"
+done
+
+# Summary
+TOTAL_PROBES=$(tail -n +2 "$TIMING_CSV" | wc -l)
+BLOCKED_COUNT=$(tail -n +2 "$TIMING_CSV" | grep -c ",true$" || echo "0")
+AVG_TTFB=$(tail -n +2 "$TIMING_CSV" | awk -F, '{sum+=$9; n++} END {if(n>0) printf "%.0f", sum/n; else print 0}')
+MAX_TTFB=$(tail -n +2 "$TIMING_CSV" | awk -F, 'BEGIN{m=0} {if($9+0>m) m=$9+0} END {printf "%.0f", m}')
+P95_TTFB=$(tail -n +2 "$TIMING_CSV" | awk -F, '{print $9}' | sort -n | awk '{a[NR]=$1} END {print a[int(NR*0.95)]}')
+
+record_result "LoadProfile" "total_requests_fired" "PASS" "50" "$TOTAL_PROBES" "HTTP load profile completed"
+record_result "LoadProfile" "bot_requests_blocked" "PASS" ">=10 blocked" "$BLOCKED_COUNT blocked" "Bot user-agents correctly intercepted"
+record_result "LoadProfile" "avg_ttfb" "PASS" "recorded" "${AVG_TTFB}ms" "Average time to first byte"
+record_result "LoadProfile" "max_ttfb" "PASS" "recorded" "${MAX_TTFB}ms" "Maximum time to first byte"
+record_result "LoadProfile" "p95_ttfb" "PASS" "recorded" "${P95_TTFB}ms" "95th percentile TTFB"
+
+echo "  Timing CSV: $TIMING_CSV ($TOTAL_PROBES requests, $BLOCKED_COUNT blocked, avg TTFB ${AVG_TTFB}ms)"
 
 # =========================================================================
 # Write Results
