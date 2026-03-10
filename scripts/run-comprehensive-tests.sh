@@ -826,7 +826,8 @@ probe_request() {
     REQ_NUM=$((REQ_NUM + 1))
 
     local PORT=$([[ "$SCHEME" == "https" ]] && echo 443 || echo 80)
-    local RESULT CURL_RC
+    local RESULT
+    # || true prevents set -e from killing the script; RESULT still captures curl output
     RESULT=$(curl -sk -o /dev/null \
         -w '%{http_code}\t%{time_connect}\t%{time_appconnect}\t%{time_starttransfer}\t%{time_total}' \
         --resolve "${HOST}:${PORT}:${VIP_CS}" \
@@ -834,8 +835,7 @@ probe_request() {
         -H "User-Agent: ${UA}" \
         -X "$METHOD" \
         --connect-timeout 10 --max-time 15 \
-        "${SCHEME}://${HOST}/" 2>/dev/null)
-    CURL_RC=$?
+        "${SCHEME}://${HOST}/" 2>/dev/null) || true
     # Only fallback if RESULT is empty or doesn't start with a valid HTTP status
     if [[ -z "$RESULT" ]] || [[ ! "$RESULT" =~ ^[0-9]{3} ]]; then
         RESULT="000	0	0	0	0"
