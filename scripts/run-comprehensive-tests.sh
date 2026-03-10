@@ -850,7 +850,8 @@ probe_request() {
     TTFB_MS=$(python3 -c "print(round(float('${T_TTFB}')*1000, 2))" 2>/dev/null || echo "0.00")
     TOTAL_MS=$(python3 -c "print(round(float('${T_TOTAL}')*1000, 2))" 2>/dev/null || echo "0.00")
 
-    BLOCKED=$([[ "$STATUS" =~ ^(403|503)$ ]] && echo "true" || echo "false")
+    # Only 403 = blocked by bot responder; 503 = backends down (not blocked)
+    BLOCKED=$([[ "$STATUS" == "403" ]] && echo "true" || echo "false")
 
     # Sanitize UA for CSV
     local SAFE_UA
