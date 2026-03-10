@@ -262,7 +262,12 @@ def load_probe_timings(csv_path):
         with open(csv_path) as f:
             rows = []
             for row in csvmod.DictReader(f):
-                for k in ('request_num', 'http_status', 'time_connect_ms', 'time_tls_ms', 'time_ttfb_ms', 'time_total_ms'):
+                for k in ('time_connect_ms', 'time_tls_ms', 'time_ttfb_ms', 'time_total_ms'):
+                    try:
+                        row[k] = float(row.get(k, 0))
+                    except (ValueError, TypeError):
+                        row[k] = 0.0
+                for k in ('request_num', 'http_status'):
                     try:
                         row[k] = int(row.get(k, 0))
                     except (ValueError, TypeError):
@@ -274,9 +279,20 @@ def load_probe_timings(csv_path):
         return []
 
 
-def render_probe_bar_chart(probe_data, label, width=1000, height=380):
-    """Render an SVG grouped bar chart — one cluster per scenario type, bars sorted by TTFB."""
-    if not probe_data:
+def fmt_ms(val):
+    """Format millisecond value — show 2 decimals for sub-1ms, 1 decimal for sub-10ms, integer for >=10ms."""
+    if val == 0:
+        return '0'
+    if val < 1:
+        return f'{val:.2f}'
+    if val < 10:
+        return f'{val:.1f}'
+    return f'{val:.0f}'
+
+
+def render_side_by_side_chart(b_probes, c_probes, width=1100, height=440):
+    """Render a side-by-side SVG comparison chart — baseline vs candidate for each scenario group."""
+    if not b_probes and not c_probes:
         return '<p style="color:var(--text-dim)">No probe timing data available.</p>'
 
     colors = {
@@ -286,98 +302,156 @@ def render_probe_bar_chart(probe_data, label, width=1000, height=380):
     }
     group_labels = {
         'normal': 'Normal', 'api': 'API', 'static': 'Static',
-        'redirect': 'Redirect', 'bot': 'Bot (blocked)', 'cors': 'CORS',
+        'redirect': 'Redirect', 'bot': 'Bot', 'cors': 'CORS',
         'method': 'Methods', 'burst': 'Burst',
     }
 
-    # Group requests by scenario, preserving order of first appearance
+    # Build groups for both datasets
+    all_probes = b_probes or c_probes
     seen_order = []
-    groups = {}
-    for row in probe_data:
+    b_groups, c_groups = {}, {}
+    for row in (b_probes or []):
         sc = row.get('scenario', 'normal')
-        if sc not in groups:
-            seen_order.append(sc)
-            groups[sc] = []
-        groups[sc].append(row)
-
-    # Sort bars within each group by TTFB
-    for sc in groups:
-        groups[sc].sort(key=lambda r: r.get('time_ttfb_ms', 0))
+        if sc not in b_groups:
+            if sc not in seen_order:
+                seen_order.append(sc)
+            b_groups[sc] = []
+        b_groups[sc].append(row)
+    for row in (c_probes or []):
+        sc = row.get('scenario', 'normal')
+        if sc not in c_groups:
+            if sc not in seen_order:
+                seen_order.append(sc)
+            c_groups[sc] = []
+        c_groups[sc].append(row)
 
     n_groups = len(seen_order)
-    margin = {'top': 30, 'right': 30, 'bottom': 65, 'left': 65}
+    margin = {'top': 40, 'right': 30, 'bottom': 80, 'left': 65}
     plot_w = width - margin['left'] - margin['right']
     plot_h = height - margin['top'] - margin['bottom']
 
-    max_ttfb = max((r.get('time_ttfb_ms', 0) for r in probe_data), default=1) or 1
-    max_ttfb = int(max_ttfb * 1.15)
+    # Global max TTFB across both datasets
+    all_ttfbs = [r.get('time_ttfb_ms', 0) for r in (b_probes or [])] + [r.get('time_ttfb_ms', 0) for r in (c_probes or [])]
+    max_ttfb = max(all_ttfbs) if all_ttfbs else 1
+    max_ttfb = max(1, max_ttfb * 1.2)
 
-    # Calculate group widths proportional to request count
-    total_reqs = len(probe_data)
-    group_gap = 20
+    # Calculate group widths based on max request count per scenario
+    group_sizes = []
+    for sc in seen_order:
+        n = max(len(b_groups.get(sc, [])), len(c_groups.get(sc, [])))
+        group_sizes.append(n)
+    total_slots = sum(group_sizes)
+    group_gap = 16
     usable_w = plot_w - group_gap * (n_groups - 1)
 
     svg = [f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" style="max-width:100%;display:block;margin:0 auto;">']
     svg.append(f'<rect x="{margin["left"]}" y="{margin["top"]}" width="{plot_w}" height="{plot_h}" fill="var(--surface)" rx="4"/>')
 
     # Grid lines + Y labels
-    for i in range(6):
-        y = margin['top'] + plot_h - (i / 5) * plot_h
-        val = (i / 5) * max_ttfb
+    n_gridlines = 6
+    for i in range(n_gridlines):
+        y = margin['top'] + plot_h - (i / (n_gridlines - 1)) * plot_h
+        val = (i / (n_gridlines - 1)) * max_ttfb
         svg.append(f'<line x1="{margin["left"]}" y1="{y:.1f}" x2="{margin["left"] + plot_w}" y2="{y:.1f}" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="4,4"/>')
-        svg.append(f'<text x="{margin["left"] - 8}" y="{y:.1f}" text-anchor="end" fill="var(--text-dim)" font-size="10" font-family="monospace" dominant-baseline="middle">{val:.0f}</text>')
+        svg.append(f'<text x="{margin["left"] - 8}" y="{y:.1f}" text-anchor="end" fill="var(--text-dim)" font-size="10" font-family="monospace" dominant-baseline="middle">{fmt_ms(val)}</text>')
 
     svg.append(f'<text x="16" y="{margin["top"] + plot_h / 2}" text-anchor="middle" fill="var(--text-dim)" font-size="11" transform="rotate(-90, 16, {margin["top"] + plot_h / 2})">TTFB (ms)</text>')
 
-    # Draw grouped bars
+    # Baseline/Candidate colors for paired bars
+    b_color = '#3b82f6'  # blue for baseline
+    c_color = '#f97316'  # orange for candidate
+
+    # Draw grouped paired bars
     x_cursor = margin['left']
     for gi, sc in enumerate(seen_order):
-        rows = groups[sc]
-        n_bars = len(rows)
-        group_w = (n_bars / total_reqs) * usable_w
-        bar_w = max(4, (group_w / n_bars) * 0.85)
-        bar_gap = (group_w - bar_w * n_bars) / max(1, n_bars + 1)
-        color = colors.get(sc, '#94a3b8')
+        b_rows = sorted(b_groups.get(sc, []), key=lambda r: r.get('request_num', 0))
+        c_rows = sorted(c_groups.get(sc, []), key=lambda r: r.get('request_num', 0))
+        n_pairs = max(len(b_rows), len(c_rows))
+        group_w = (n_pairs / total_slots) * usable_w
+        sc_color = colors.get(sc, '#94a3b8')
 
         # Group background stripe
-        svg.append(f'<rect x="{x_cursor:.1f}" y="{margin["top"]}" width="{group_w:.1f}" height="{plot_h}" fill="{color}" opacity="0.04" rx="3"/>')
+        svg.append(f'<rect x="{x_cursor:.1f}" y="{margin["top"]}" width="{group_w:.1f}" height="{plot_h}" fill="{sc_color}" opacity="0.04" rx="3"/>')
 
-        # Bars
-        for bi, row in enumerate(rows):
-            bx = x_cursor + bar_gap + bi * (bar_w + bar_gap)
-            ttfb = row.get('time_ttfb_ms', 0)
-            bar_h = (ttfb / max_ttfb) * plot_h if max_ttfb > 0 else 0
-            by = margin['top'] + plot_h - bar_h
-            status = row.get('http_status', '?')
-            total = row.get('time_total_ms', 0)
-            method = row.get('method', 'GET')
-            host = row.get('host', '')
-            ua_short = str(row.get('user_agent', ''))[:40]
-            tip = f"#{row.get('request_num', bi+1)} {sc} | {host} {method} | HTTP {status} | TTFB: {ttfb}ms | Total: {total}ms | UA: {ua_short}"
+        # Each pair: baseline bar (left, blue) + candidate bar (right, orange)
+        pair_w = group_w / max(1, n_pairs)
+        bar_w = max(3, pair_w * 0.38)
+        pair_gap = pair_w * 0.06
 
-            svg.append(f'<rect x="{bx:.1f}" y="{by:.1f}" width="{bar_w:.1f}" height="{max(1, bar_h):.1f}" rx="2" fill="{color}" opacity="0.85" '
-                       f'onmouseover="this.setAttribute(\'opacity\',\'1\');this.setAttribute(\'stroke\',\'white\');this.setAttribute(\'stroke-width\',\'1.5\')" '
-                       f'onmouseout="this.setAttribute(\'opacity\',\'0.85\');this.removeAttribute(\'stroke\');this.removeAttribute(\'stroke-width\')">'
-                       f'<title>{esc(tip)}</title></rect>')
+        for pi in range(n_pairs):
+            px = x_cursor + pi * pair_w + pair_w * 0.08
 
-        # Group label below
+            # Baseline bar
+            if pi < len(b_rows):
+                row = b_rows[pi]
+                ttfb = row.get('time_ttfb_ms', 0)
+                total = row.get('time_total_ms', 0)
+                bar_h = (ttfb / max_ttfb) * plot_h if max_ttfb > 0 else 0
+                by = margin['top'] + plot_h - bar_h
+                status = row.get('http_status', '?')
+                tip = f"Baseline #{row.get('request_num', pi+1)} {sc} | HTTP {status} | TTFB: {fmt_ms(ttfb)}ms | Total: {fmt_ms(total)}ms"
+                svg.append(f'<rect x="{px:.1f}" y="{by:.1f}" width="{bar_w:.1f}" height="{max(0.5, bar_h):.1f}" rx="1" fill="{b_color}" opacity="0.8" '
+                           f'onmouseover="this.setAttribute(\'opacity\',\'1\');this.setAttribute(\'stroke\',\'white\');this.setAttribute(\'stroke-width\',\'1\')" '
+                           f'onmouseout="this.setAttribute(\'opacity\',\'0.8\');this.removeAttribute(\'stroke\');this.removeAttribute(\'stroke-width\')">'
+                           f'<title>{esc(tip)}</title></rect>')
+
+            # Candidate bar
+            if pi < len(c_rows):
+                row = c_rows[pi]
+                ttfb = row.get('time_ttfb_ms', 0)
+                total = row.get('time_total_ms', 0)
+                bar_h = (ttfb / max_ttfb) * plot_h if max_ttfb > 0 else 0
+                by = margin['top'] + plot_h - bar_h
+                status = row.get('http_status', '?')
+                tip = f"Candidate #{row.get('request_num', pi+1)} {sc} | HTTP {status} | TTFB: {fmt_ms(ttfb)}ms | Total: {fmt_ms(total)}ms"
+                svg.append(f'<rect x="{px + bar_w + pair_gap:.1f}" y="{by:.1f}" width="{bar_w:.1f}" height="{max(0.5, bar_h):.1f}" rx="1" fill="{c_color}" opacity="0.8" '
+                           f'onmouseover="this.setAttribute(\'opacity\',\'1\');this.setAttribute(\'stroke\',\'white\');this.setAttribute(\'stroke-width\',\'1\')" '
+                           f'onmouseout="this.setAttribute(\'opacity\',\'0.8\');this.removeAttribute(\'stroke\');this.removeAttribute(\'stroke-width\')">'
+                           f'<title>{esc(tip)}</title></rect>')
+
+        # Group label below x-axis
         mid = x_cursor + group_w / 2
         label_y = margin['top'] + plot_h + 16
         lbl = group_labels.get(sc, sc)
-        svg.append(f'<text x="{mid:.1f}" y="{label_y}" text-anchor="middle" fill="{color}" font-size="11" font-weight="600">{lbl}</text>')
+        svg.append(f'<text x="{mid:.1f}" y="{label_y}" text-anchor="middle" fill="{sc_color}" font-size="11" font-weight="600">{lbl}</text>')
 
-        # Avg TTFB below label
-        avg_ttfb = sum(r.get('time_ttfb_ms', 0) for r in rows) / max(1, len(rows))
-        svg.append(f'<text x="{mid:.1f}" y="{label_y + 14}" text-anchor="middle" fill="var(--text-dim)" font-size="9" font-family="monospace">avg {avg_ttfb:.0f}ms ({n_bars})</text>')
+        # Avg TTFB comparison below label
+        b_avg = sum(r.get('time_ttfb_ms', 0) for r in b_rows) / max(1, len(b_rows)) if b_rows else 0
+        c_avg = sum(r.get('time_ttfb_ms', 0) for r in c_rows) / max(1, len(c_rows)) if c_rows else 0
+        svg.append(f'<text x="{mid:.1f}" y="{label_y + 13}" text-anchor="middle" fill="{b_color}" font-size="8" font-family="monospace">B:{fmt_ms(b_avg)}ms</text>')
+        svg.append(f'<text x="{mid:.1f}" y="{label_y + 24}" text-anchor="middle" fill="{c_color}" font-size="8" font-family="monospace">C:{fmt_ms(c_avg)}ms</text>')
 
-        # Avg line across group
-        avg_y = margin['top'] + plot_h - (avg_ttfb / max_ttfb) * plot_h
-        svg.append(f'<line x1="{x_cursor + 2:.1f}" y1="{avg_y:.1f}" x2="{x_cursor + group_w - 2:.1f}" y2="{avg_y:.1f}" stroke="{color}" stroke-width="1.5" stroke-dasharray="3,3" opacity="0.7"/>')
+        # Diff indicator
+        if b_rows and c_rows:
+            diff = c_avg - b_avg
+            if b_avg > 0:
+                pct = diff / b_avg * 100
+                sign = '+' if diff > 0 else ''
+                dcolor = '#ef4444' if diff > 0.5 else ('#22c55e' if diff < -0.5 else 'var(--text-dim)')
+                svg.append(f'<text x="{mid:.1f}" y="{label_y + 36}" text-anchor="middle" fill="{dcolor}" font-size="8" font-weight="600" font-family="monospace">{sign}{pct:.0f}%</text>')
+
+        # Avg dashed lines across group
+        if b_rows:
+            avg_y = margin['top'] + plot_h - (b_avg / max_ttfb) * plot_h
+            svg.append(f'<line x1="{x_cursor + 2:.1f}" y1="{avg_y:.1f}" x2="{x_cursor + group_w - 2:.1f}" y2="{avg_y:.1f}" stroke="{b_color}" stroke-width="1.2" stroke-dasharray="3,3" opacity="0.6"/>')
+        if c_rows:
+            avg_y = margin['top'] + plot_h - (c_avg / max_ttfb) * plot_h
+            svg.append(f'<line x1="{x_cursor + 2:.1f}" y1="{avg_y:.1f}" x2="{x_cursor + group_w - 2:.1f}" y2="{avg_y:.1f}" stroke="{c_color}" stroke-width="1.2" stroke-dasharray="3,3" opacity="0.6"/>')
 
         x_cursor += group_w + group_gap
 
+    # Legend
+    leg_x = margin['left'] + 10
+    leg_y = margin['top'] + 12
+    svg.append(f'<rect x="{leg_x}" y="{leg_y - 8}" width="10" height="10" rx="2" fill="{b_color}" opacity="0.8"/>')
+    svg.append(f'<text x="{leg_x + 14}" y="{leg_y}" fill="var(--text-dim)" font-size="10" dominant-baseline="middle">Baseline</text>')
+    svg.append(f'<rect x="{leg_x + 75}" y="{leg_y - 8}" width="10" height="10" rx="2" fill="{c_color}" opacity="0.8"/>')
+    svg.append(f'<text x="{leg_x + 89}" y="{leg_y}" fill="var(--text-dim)" font-size="10" dominant-baseline="middle">Candidate</text>')
+
     # Title
-    svg.append(f'<text x="{margin["left"] + plot_w / 2}" y="16" text-anchor="middle" fill="var(--text-dim)" font-size="12">{label} — {total_reqs} requests by scenario</text>')
+    b_count = len(b_probes or [])
+    c_count = len(c_probes or [])
+    svg.append(f'<text x="{margin["left"] + plot_w / 2}" y="16" text-anchor="middle" fill="var(--text)" font-size="13" font-weight="600">Baseline vs Candidate — {max(b_count, c_count)} requests by scenario</text>')
 
     svg.append('</svg>')
     return '\n'.join(svg)
@@ -826,98 +900,64 @@ footer {{
                 html_parts.append('</tr>\n')
             html_parts.append('</tbody></table>\n')
 
-    # --- HTTP Load Profile Charts ---
+    # --- HTTP Load Profile Charts (Side-by-Side Comparison) ---
     if b_probes or c_probes:
         html_parts.append('<h2 id="loadprofile">HTTP Load Profile (50 Requests)</h2>\n')
-        html_parts.append('<p style="color:var(--text-dim);margin-bottom:1rem;">50 HTTP requests per VPX — mix of normal browsing, API calls, bot user-agents (should be blocked), CORS preflight, HTTP methods, and burst traffic. Hover over bars for details.</p>\n')
+        html_parts.append('<p style="color:var(--text-dim);margin-bottom:1rem;">50 HTTP requests per VPX — side-by-side comparison of baseline (blue) vs candidate (orange). Grouped by scenario type. Hover bars for timing details.</p>\n')
 
-        html_parts.append('<div class="tab-group" data-group="probes">')
-        if b_probes:
-            html_parts.append('    <div class="tab active" onclick="switchTab(\'probes\', \'probe-baseline\')">Baseline</div>')
-        if c_probes:
-            active = '' if b_probes else ' active'
-            html_parts.append(f'    <div class="tab{active}" onclick="switchTab(\'probes\', \'probe-candidate\')">Candidate</div>')
-        html_parts.append('</div>')
+        # Side-by-side chart
+        html_parts.append(render_side_by_side_chart(b_probes, c_probes))
 
-        if b_probes:
-            html_parts.append(f'<div id="probe-baseline" class="tab-panel active" data-group="probes">\n')
-            html_parts.append(render_probe_bar_chart(b_probes, "Baseline"))
+        # Comparison stats table
+        b_ttfbs = [r['time_ttfb_ms'] for r in b_probes] if b_probes else []
+        c_ttfbs = [r['time_ttfb_ms'] for r in c_probes] if c_probes else []
+        b_blocked = sum(1 for r in (b_probes or []) if r.get('blocked') == 'true')
+        c_blocked = sum(1 for r in (c_probes or []) if r.get('blocked') == 'true')
+        b_totals = [r['time_total_ms'] for r in b_probes] if b_probes else []
+        c_totals = [r['time_total_ms'] for r in c_probes] if c_probes else []
 
-            # Stats summary
-            b_ttfbs = [r['time_ttfb_ms'] for r in b_probes]
-            b_blocked = sum(1 for r in b_probes if r.get('blocked') == 'true')
-            b_totals = [r['time_total_ms'] for r in b_probes]
-            sorted_ttfb = sorted(b_ttfbs)
-            p95 = sorted_ttfb[int(len(sorted_ttfb) * 0.95)] if sorted_ttfb else 0
-            html_parts.append(f'''
-<div class="summary-grid" style="margin-top:1rem;">
-    <div class="summary-card"><h3>Requests</h3>
-        <div class="stat-row"><span class="stat-label">Total</span><span class="stat-value">{len(b_probes)}</span></div>
-        <div class="stat-row"><span class="stat-label">Blocked (bot)</span><span class="stat-value" style="color:var(--red)">{b_blocked}</span></div>
-        <div class="stat-row"><span class="stat-label">Successful</span><span class="stat-value" style="color:var(--green)">{len(b_probes) - b_blocked}</span></div>
+        b_avg = sum(b_ttfbs) / len(b_ttfbs) if b_ttfbs else 0
+        c_avg = sum(c_ttfbs) / len(c_ttfbs) if c_ttfbs else 0
+        b_p95 = sorted(b_ttfbs)[int(len(b_ttfbs) * 0.95)] if b_ttfbs else 0
+        c_p95 = sorted(c_ttfbs)[int(len(c_ttfbs) * 0.95)] if c_ttfbs else 0
+
+        diff = c_avg - b_avg
+        diff_pct = (diff / b_avg * 100) if b_avg > 0 else 0
+        if diff > 0.5:
+            diff_str = f'+{fmt_ms(diff)}ms ({diff_pct:+.0f}%)'
+            diff_color = 'var(--red)'
+        elif diff < -0.5:
+            diff_str = f'{fmt_ms(diff)}ms ({diff_pct:+.0f}%)'
+            diff_color = 'var(--green)'
+        else:
+            diff_str = f'{fmt_ms(abs(diff))}ms (identical)'
+            diff_color = 'var(--text)'
+
+        html_parts.append(f'''
+<div class="summary-grid" style="margin-top:1.5rem;">
+    <div class="summary-card"><h3 style="color:#3b82f6">Baseline</h3>
+        <div class="stat-row"><span class="stat-label">Requests</span><span class="stat-value">{len(b_probes or [])}</span></div>
+        <div class="stat-row"><span class="stat-label">Blocked</span><span class="stat-value" style="color:var(--red)">{b_blocked}</span></div>
+        <div class="stat-row"><span class="stat-label">Avg TTFB</span><span class="stat-value">{fmt_ms(b_avg)}ms</span></div>
+        <div class="stat-row"><span class="stat-label">P95 TTFB</span><span class="stat-value">{fmt_ms(b_p95)}ms</span></div>
+        <div class="stat-row"><span class="stat-label">Max TTFB</span><span class="stat-value">{fmt_ms(max(b_ttfbs) if b_ttfbs else 0)}ms</span></div>
+        <div class="stat-row"><span class="stat-label">Min TTFB</span><span class="stat-value">{fmt_ms(min(b_ttfbs) if b_ttfbs else 0)}ms</span></div>
     </div>
-    <div class="summary-card"><h3>TTFB</h3>
-        <div class="stat-row"><span class="stat-label">Average</span><span class="stat-value">{sum(b_ttfbs) // len(b_ttfbs) if b_ttfbs else 0}ms</span></div>
-        <div class="stat-row"><span class="stat-label">P95</span><span class="stat-value">{p95}ms</span></div>
-        <div class="stat-row"><span class="stat-label">Max</span><span class="stat-value">{max(b_ttfbs) if b_ttfbs else 0}ms</span></div>
-        <div class="stat-row"><span class="stat-label">Min</span><span class="stat-value">{min(b_ttfbs) if b_ttfbs else 0}ms</span></div>
+    <div class="summary-card"><h3 style="color:#f97316">Candidate</h3>
+        <div class="stat-row"><span class="stat-label">Requests</span><span class="stat-value">{len(c_probes or [])}</span></div>
+        <div class="stat-row"><span class="stat-label">Blocked</span><span class="stat-value" style="color:var(--red)">{c_blocked}</span></div>
+        <div class="stat-row"><span class="stat-label">Avg TTFB</span><span class="stat-value">{fmt_ms(c_avg)}ms</span></div>
+        <div class="stat-row"><span class="stat-label">P95 TTFB</span><span class="stat-value">{fmt_ms(c_p95)}ms</span></div>
+        <div class="stat-row"><span class="stat-label">Max TTFB</span><span class="stat-value">{fmt_ms(max(c_ttfbs) if c_ttfbs else 0)}ms</span></div>
+        <div class="stat-row"><span class="stat-label">Min TTFB</span><span class="stat-value">{fmt_ms(min(c_ttfbs) if c_ttfbs else 0)}ms</span></div>
     </div>
-    <div class="summary-card"><h3>Total Time</h3>
-        <div class="stat-row"><span class="stat-label">Average</span><span class="stat-value">{sum(b_totals) // len(b_totals) if b_totals else 0}ms</span></div>
-        <div class="stat-row"><span class="stat-label">Max</span><span class="stat-value">{max(b_totals) if b_totals else 0}ms</span></div>
-    </div>
-</div>''')
-            html_parts.append('</div>\n')
-
-        if c_probes:
-            active = '' if b_probes else ' active'
-            html_parts.append(f'<div id="probe-candidate" class="tab-panel{active}" data-group="probes">\n')
-            html_parts.append(render_probe_bar_chart(c_probes, "Candidate"))
-
-            c_ttfbs = [r['time_ttfb_ms'] for r in c_probes]
-            c_blocked = sum(1 for r in c_probes if r.get('blocked') == 'true')
-            c_totals = [r['time_total_ms'] for r in c_probes]
-            sorted_c = sorted(c_ttfbs)
-            p95c = sorted_c[int(len(sorted_c) * 0.95)] if sorted_c else 0
-
-            # Comparison with baseline
-            if b_probes:
-                b_avg = sum(b_ttfbs) // len(b_ttfbs) if b_ttfbs else 0
-                c_avg = sum(c_ttfbs) // len(c_ttfbs) if c_ttfbs else 0
-                diff = c_avg - b_avg
-                diff_pct = (diff / b_avg * 100) if b_avg > 0 else 0
-                if diff > 0:
-                    diff_str = f'+{diff}ms ({diff_pct:+.0f}%)'
-                    diff_color = 'var(--red)'
-                elif diff < 0:
-                    diff_str = f'{diff}ms ({diff_pct:+.0f}%)'
-                    diff_color = 'var(--green)'
-                else:
-                    diff_str = 'identical'
-                    diff_color = 'var(--text)'
-            else:
-                diff_str = 'N/A'
-                diff_color = 'var(--text-dim)'
-
-            html_parts.append(f'''
-<div class="summary-grid" style="margin-top:1rem;">
-    <div class="summary-card"><h3>Requests</h3>
-        <div class="stat-row"><span class="stat-label">Total</span><span class="stat-value">{len(c_probes)}</span></div>
-        <div class="stat-row"><span class="stat-label">Blocked (bot)</span><span class="stat-value" style="color:var(--red)">{c_blocked}</span></div>
-        <div class="stat-row"><span class="stat-label">Successful</span><span class="stat-value" style="color:var(--green)">{len(c_probes) - c_blocked}</span></div>
-    </div>
-    <div class="summary-card"><h3>TTFB</h3>
-        <div class="stat-row"><span class="stat-label">Average</span><span class="stat-value">{sum(c_ttfbs) // len(c_ttfbs) if c_ttfbs else 0}ms</span></div>
-        <div class="stat-row"><span class="stat-label">P95</span><span class="stat-value">{p95c}ms</span></div>
-        <div class="stat-row"><span class="stat-label">Max</span><span class="stat-value">{max(c_ttfbs) if c_ttfbs else 0}ms</span></div>
-        <div class="stat-row"><span class="stat-label">Min</span><span class="stat-value">{min(c_ttfbs) if c_ttfbs else 0}ms</span></div>
-    </div>
-    <div class="summary-card"><h3>vs Baseline</h3>
+    <div class="summary-card"><h3>Comparison</h3>
         <div class="stat-row"><span class="stat-label">TTFB Diff</span><span class="stat-value" style="color:{diff_color}">{diff_str}</span></div>
-        <div class="stat-row"><span class="stat-label">Blocked Match</span><span class="stat-value">{"YES" if b_probes and sum(1 for r in b_probes if r.get("blocked")=="true") == c_blocked else "NO"}</span></div>
+        <div class="stat-row"><span class="stat-label">Blocked Match</span><span class="stat-value">{"YES" if b_blocked == c_blocked else "NO"}</span></div>
+        <div class="stat-row"><span class="stat-label">P95 Diff</span><span class="stat-value">{fmt_ms(abs(c_p95 - b_p95))}ms</span></div>
+        <div class="stat-row"><span class="stat-label">Max Diff</span><span class="stat-value">{fmt_ms(abs((max(c_ttfbs) if c_ttfbs else 0) - (max(b_ttfbs) if b_ttfbs else 0)))}ms</span></div>
     </div>
 </div>''')
-            html_parts.append('</div>\n')
 
     # --- CLI Differences Section ---
     html_parts.append('<h2 id="diffs">CLI Differences</h2>\n')

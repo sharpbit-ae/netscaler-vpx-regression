@@ -533,7 +533,7 @@ resource "citrixadc_responderaction" "hardened_503" {
 
 resource "citrixadc_responderpolicy" "hardened_503" {
   name   = "rs_pol_hardened_503"
-  rule   = "SYS.VSERVER(\"${citrixadc_lbvserver.web.name}\").ACTIVESERVICES.EQ(0) && SYS.VSERVER(\"${citrixadc_lbvserver.web_ssl.name}\").ACTIVESERVICES.EQ(0)"
+  rule   = "SYS.VSERVER(\"${citrixadc_lbvserver.web.name}\").ACTIVESERVICES.EQ(0) && SYS.VSERVER(\"${citrixadc_lbvserver.web_ssl.name}\").ACTIVESERVICES.EQ(0) && SYS.VSERVER(\"${citrixadc_lbvserver.api.name}\").ACTIVESERVICES.EQ(0)"
   action = citrixadc_responderaction.hardened_503.name
 }
 

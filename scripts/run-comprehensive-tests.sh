@@ -826,7 +826,7 @@ probe_request() {
     REQ_NUM=$((REQ_NUM + 1))
 
     local PORT=$([[ "$SCHEME" == "https" ]] && echo 443 || echo 80)
-    local RESULT
+    local RESULT CURL_RC
     RESULT=$(curl -sk -o /dev/null \
         -w '%{http_code}\t%{time_connect}\t%{time_appconnect}\t%{time_starttransfer}\t%{time_total}' \
         --resolve "${HOST}:${PORT}:${VIP_CS}" \
@@ -834,15 +834,21 @@ probe_request() {
         -H "User-Agent: ${UA}" \
         -X "$METHOD" \
         --connect-timeout 10 --max-time 15 \
-        "${SCHEME}://${HOST}/" 2>/dev/null) || RESULT="000	0	0	0	0"
+        "${SCHEME}://${HOST}/" 2>/dev/null)
+    CURL_RC=$?
+    # Only fallback if RESULT is empty or doesn't start with a valid HTTP status
+    if [[ -z "$RESULT" ]] || [[ ! "$RESULT" =~ ^[0-9]{3} ]]; then
+        RESULT="000	0	0	0	0"
+    fi
 
     IFS=$'\t' read -r STATUS T_CONN T_TLS T_TTFB T_TOTAL <<< "$RESULT"
 
+    # Sub-millisecond precision: 2 decimal places (e.g., 0.34ms instead of 0ms)
     local CONN_MS TLS_MS TTFB_MS TOTAL_MS BLOCKED
-    CONN_MS=$(python3 -c "print(int(float('${T_CONN}')*1000))" 2>/dev/null || echo 0)
-    TLS_MS=$(python3 -c "print(max(0,int((float('${T_TLS}')-float('${T_CONN}'))*1000)))" 2>/dev/null || echo 0)
-    TTFB_MS=$(python3 -c "print(int(float('${T_TTFB}')*1000))" 2>/dev/null || echo 0)
-    TOTAL_MS=$(python3 -c "print(int(float('${T_TOTAL}')*1000))" 2>/dev/null || echo 0)
+    CONN_MS=$(python3 -c "print(round(float('${T_CONN}')*1000, 2))" 2>/dev/null || echo "0.00")
+    TLS_MS=$(python3 -c "print(round(max(0, (float('${T_TLS}')-float('${T_CONN}'))*1000), 2))" 2>/dev/null || echo "0.00")
+    TTFB_MS=$(python3 -c "print(round(float('${T_TTFB}')*1000, 2))" 2>/dev/null || echo "0.00")
+    TOTAL_MS=$(python3 -c "print(round(float('${T_TOTAL}')*1000, 2))" 2>/dev/null || echo "0.00")
 
     BLOCKED=$([[ "$STATUS" =~ ^(403|503)$ ]] && echo "true" || echo "false")
 
@@ -897,9 +903,9 @@ done
 # Summary
 TOTAL_PROBES=$(tail -n +2 "$TIMING_CSV" | wc -l)
 BLOCKED_COUNT=$(tail -n +2 "$TIMING_CSV" | grep -c ",true$" || echo "0")
-AVG_TTFB=$(tail -n +2 "$TIMING_CSV" | awk -F, '{sum+=$9; n++} END {if(n>0) printf "%.0f", sum/n; else print 0}')
-MAX_TTFB=$(tail -n +2 "$TIMING_CSV" | awk -F, 'BEGIN{m=0} {if($9+0>m) m=$9+0} END {printf "%.0f", m}')
-P95_TTFB=$(tail -n +2 "$TIMING_CSV" | awk -F, '{print $9}' | sort -n | awk '{a[NR]=$1} END {print a[int(NR*0.95)]}')
+AVG_TTFB=$(tail -n +2 "$TIMING_CSV" | awk -F, '{sum+=$9; n++} END {if(n>0) printf "%.2f", sum/n; else print "0.00"}')
+MAX_TTFB=$(tail -n +2 "$TIMING_CSV" | awk -F, 'BEGIN{m=0} {if($9+0>m) m=$9+0} END {printf "%.2f", m}')
+P95_TTFB=$(tail -n +2 "$TIMING_CSV" | awk -F, '{print $9}' | sort -n | awk '{a[NR]=$1} END {printf "%.2f", a[int(NR*0.95)]}')
 
 record_result "LoadProfile" "total_requests_fired" "PASS" "50" "$TOTAL_PROBES" "HTTP load profile completed"
 record_result "LoadProfile" "bot_requests_blocked" "PASS" ">=10 blocked" "$BLOCKED_COUNT blocked" "Bot user-agents correctly intercepted"
