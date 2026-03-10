@@ -263,6 +263,91 @@ def build_results(is_candidate=False):
     r.append(pass_test("SNIP", "nsip_snip.mgmtaccess", "ENABLED"))
     r.append(pass_test("SNIP", "nsip_snip.ipaddress", snip))
 
+    # 24. HTTP Probe - Live Response Testing (9 tests)
+    b_connect = 12 if not is_candidate else 14
+    b_tls = 45 if not is_candidate else 52
+    b_ttfb = 89 if not is_candidate else 156
+    b_total = 95 if not is_candidate else 178
+
+    r.append({"category": "HTTPProbe", "test": "https_response_status", "status": "PASS",
+              "expected": "valid HTTP response", "actual": "HTTP 200", "detail": ""})
+    r.append({"category": "HTTPProbe", "test": "tcp_connect_time", "status": "PASS",
+              "expected": "<1000ms", "actual": f"{b_connect}ms", "detail": "TCP connection established"})
+    r.append({"category": "HTTPProbe", "test": "tls_handshake_time", "status": "PASS",
+              "expected": "<2000ms", "actual": f"{b_tls}ms", "detail": "TLS negotiation completed"})
+    if is_candidate:
+        r.append({"category": "HTTPProbe", "test": "time_to_first_byte", "status": "WARN",
+                  "expected": "<5000ms", "actual": f"{b_ttfb}ms",
+                  "detail": "TTFB 75% slower than baseline (156ms vs 89ms)"})
+    else:
+        r.append({"category": "HTTPProbe", "test": "time_to_first_byte", "status": "PASS",
+                  "expected": "<5000ms", "actual": f"{b_ttfb}ms", "detail": "Time to first byte"})
+    r.append({"category": "HTTPProbe", "test": "total_response_time", "status": "PASS",
+              "expected": "<10000ms", "actual": f"{b_total}ms", "detail": "Total request-response cycle"})
+    r.append({"category": "HTTPProbe", "test": "timing_breakdown", "status": "PASS",
+              "expected": "recorded",
+              "actual": f"dns=0.001s tcp={b_connect/1000:.3f}s tls={b_tls/1000:.3f}s ttfb={b_ttfb/1000:.3f}s total={b_total/1000:.3f}s",
+              "detail": f"Connect={b_connect}ms TLS={b_tls}ms TTFB={b_ttfb}ms Total={b_total}ms"})
+    r.append(pass_test("HTTPProbe", "http_to_https_redirect", "301", "HTTP→HTTPS redirect working"))
+    r.append({"category": "HTTPProbe", "test": "bot_blocking_active", "status": "PASS",
+              "expected": "blocked", "actual": "HTTP 403", "detail": "Bot user-agent correctly blocked"})
+
+    # 25. Response Header Validation (13 tests)
+    security_headers = {
+        "X-Frame-Options": "DENY",
+        "X-Content-Type-Options": "nosniff",
+        "X-XSS-Protection": "1; mode=block",
+        "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+        "Referrer-Policy": "strict-origin-when-cross-origin",
+        "Content-Security-Policy": "default-src 'self'",
+        "Permissions-Policy": "geolocation=(), camera=(), microphone=()",
+    }
+    for hdr, val in security_headers.items():
+        if is_candidate and hdr == "Strict-Transport-Security":
+            r.append(fail_test("HeaderValidation", f"response_header:{hdr}", "present", "missing",
+                              "REGRESSION: HSTS header not present in candidate response"))
+        else:
+            r.append({"category": "HeaderValidation", "test": f"response_header:{hdr}", "status": "PASS",
+                      "expected": "present", "actual": val, "detail": ""})
+
+    for hdr in ["Server", "X-Powered-By", "X-AspNet-Version"]:
+        r.append(pass_test("HeaderValidation", f"removed_header:{hdr}", "absent"))
+
+    if is_candidate:
+        r.append(fail_test("HeaderValidation", "hsts_max_age", "max-age=31536000", "missing",
+                          "HSTS header not found"))
+    else:
+        r.append({"category": "HeaderValidation", "test": "hsts_max_age", "status": "PASS",
+                  "expected": "max-age=31536000", "actual": "max-age=31536000; includeSubDomains", "detail": ""})
+
+    r.append({"category": "HeaderValidation", "test": "response_headers_collected", "status": "PASS",
+              "expected": "collected", "actual": "14 headers", "detail": "All response headers captured for analysis"})
+
+    # 26. SSL Certificate Probing (11 tests)
+    r.append({"category": "SSLProbe", "test": "cert_subject", "status": "PASS",
+              "expected": "contains lab.local", "actual": "CN = *.lab.local", "detail": ""})
+    r.append({"category": "SSLProbe", "test": "cert_issuer", "status": "PASS",
+              "expected": "Lab CA", "actual": "CN = Lab CA, O = Lab, C = US", "detail": ""})
+    r.append({"category": "SSLProbe", "test": "cert_not_after", "status": "PASS",
+              "expected": "valid", "actual": "Jun 10 00:00:00 2026 GMT", "detail": ""})
+    r.append({"category": "SSLProbe", "test": "cert_not_before", "status": "PASS",
+              "expected": "valid", "actual": "Mar 10 00:00:00 2026 GMT", "detail": ""})
+    r.append({"category": "SSLProbe", "test": "cert_serial", "status": "PASS",
+              "expected": "present", "actual": "7A3B4C5D6E7F8A9B", "detail": ""})
+    r.append({"category": "SSLProbe", "test": "cert_signature_alg", "status": "PASS",
+              "expected": "sha256+", "actual": "sha256WithRSAEncryption", "detail": ""})
+    r.append({"category": "SSLProbe", "test": "cert_key_size", "status": "PASS",
+              "expected": ">=2048 bit", "actual": "2048 bit", "detail": ""})
+    r.append({"category": "SSLProbe", "test": "negotiated_protocol", "status": "PASS",
+              "expected": "TLSv1.2 or TLSv1.3",
+              "actual": "TLSv1.3" if not is_candidate else "TLSv1.2", "detail": ""})
+    r.append({"category": "SSLProbe", "test": "negotiated_cipher", "status": "PASS",
+              "expected": "AEAD cipher",
+              "actual": "TLS_AES_256_GCM_SHA384" if not is_candidate else "ECDHE-RSA-AES256-GCM-SHA384",
+              "detail": ""})
+    r.append({"category": "SSLProbe", "test": "cert_chain_depth", "status": "PASS",
+              "expected": ">=2 certificates", "actual": "2 certificates", "detail": "Full chain presented"})
+
     # Add candidate-only failure: SSL cert binding missing after upgrade
     if is_candidate:
         # Replace the passing cert binding test with a failure

@@ -228,6 +228,33 @@ def svg_line_chart(metrics, fields, colors, labels, y_label, width=700, height=2
     svg.append('</svg>')
     return '\n'.join(svg)
 
+def extract_probe_data(tests):
+    """Extract HTTP probe timing and SSL data from test results."""
+    timing = {}
+    ssl = {}
+    headers = {}
+    if not tests or 'results' not in tests:
+        return timing, ssl, headers
+    for r in tests['results']:
+        cat = r.get('category', '')
+        if cat == 'HTTPProbe':
+            name = r['test']
+            if name in ('tcp_connect_time', 'tls_handshake_time', 'time_to_first_byte', 'total_response_time'):
+                try:
+                    timing[name] = int(r.get('actual', '0').replace('ms', ''))
+                except (ValueError, AttributeError):
+                    pass
+            elif name == 'https_response_status':
+                timing['status'] = r.get('actual', '')
+            elif name == 'timing_breakdown':
+                timing['breakdown'] = r.get('detail', '')
+        elif cat == 'SSLProbe':
+            ssl[r['test']] = r.get('actual', '')
+        elif cat == 'HeaderValidation':
+            headers[r['test']] = {'status': r['status'], 'actual': r.get('actual', '')}
+    return timing, ssl, headers
+
+
 def render_test_table(results, label):
     """Render a table of test results."""
     if not results:
@@ -477,6 +504,7 @@ footer {{
         <li><a href="#summary">Executive Summary</a></li>
         <li><a href="#charts">Category Breakdown</a></li>
         <li><a href="#failures">Failures &amp; Warnings</a></li>
+        <li><a href="#probing">HTTP Probing</a></li>
         <li><a href="#diffs">CLI Differences</a></li>
         <li><a href="#resources">Resource Usage</a></li>
         <li><a href="#passed">Passed Tests</a></li>
@@ -566,6 +594,97 @@ footer {{
             html_parts.append(f'<div id="fail-candidate" class="tab-panel{active}" data-group="failures">\n')
             html_parts.append(render_test_table(c_failures, "Candidate"))
             html_parts.append('</div>\n')
+
+    # --- HTTP Probing Section ---
+    b_timing, b_ssl, b_headers = extract_probe_data(baseline_tests)
+    c_timing, c_ssl, c_headers = extract_probe_data(candidate_tests)
+
+    if b_timing or c_timing or b_ssl or c_ssl:
+        html_parts.append('<h2 id="probing">HTTP Probing</h2>\n')
+        html_parts.append('<p style="color:var(--text-dim);margin-bottom:1rem;">Live HTTP request timing and SSL comparison between baseline and candidate firmware.</p>\n')
+
+        # Timing comparison cards
+        if b_timing or c_timing:
+            html_parts.append('<h3>Response Timing</h3>\n')
+            html_parts.append('<div class="summary-grid">')
+            timing_metrics = [
+                ('tcp_connect_time', 'TCP Connect'),
+                ('tls_handshake_time', 'TLS Handshake'),
+                ('time_to_first_byte', 'TTFB'),
+                ('total_response_time', 'Total Time'),
+            ]
+            for key, label in timing_metrics:
+                b_val = b_timing.get(key)
+                c_val = c_timing.get(key)
+                if b_val is not None and c_val is not None:
+                    diff = c_val - b_val
+                    diff_pct = (diff / b_val * 100) if b_val > 0 else 0
+                    if diff > 0:
+                        diff_color = 'var(--red)'
+                        diff_label = f'+{diff}ms ({diff_pct:+.0f}%)'
+                    elif diff < 0:
+                        diff_color = 'var(--green)'
+                        diff_label = f'{diff}ms ({diff_pct:+.0f}%)'
+                    else:
+                        diff_color = 'var(--text)'
+                        diff_label = 'identical'
+                else:
+                    diff_color = 'var(--text-dim)'
+                    diff_label = 'N/A'
+                html_parts.append(f'''    <div class="summary-card">
+        <h3>{esc(label)}</h3>
+        <div class="stat-row"><span class="stat-label">Baseline</span><span class="stat-value">{b_val if b_val is not None else "N/A"}{"ms" if b_val is not None else ""}</span></div>
+        <div class="stat-row"><span class="stat-label">Candidate</span><span class="stat-value">{c_val if c_val is not None else "N/A"}{"ms" if c_val is not None else ""}</span></div>
+        <div class="stat-row"><span class="stat-label">Difference</span><span class="stat-value" style="color:{diff_color}">{diff_label}</span></div>
+    </div>''')
+            html_parts.append('</div>\n')
+
+        # SSL connection details
+        if b_ssl or c_ssl:
+            html_parts.append('<h3>SSL Connection Details</h3>\n')
+            html_parts.append('<div class="summary-grid">')
+            for label_name, ssl_data in [("Baseline", b_ssl), ("Candidate", c_ssl)]:
+                if ssl_data:
+                    html_parts.append(f'''    <div class="summary-card">
+        <h3>{label_name}</h3>
+        <div class="stat-row"><span class="stat-label">Protocol</span><span class="stat-value">{esc(ssl_data.get("negotiated_protocol", "N/A"))}</span></div>
+        <div class="stat-row"><span class="stat-label">Cipher</span><span class="stat-value" style="font-size:0.75rem">{esc(ssl_data.get("negotiated_cipher", "N/A"))}</span></div>
+        <div class="stat-row"><span class="stat-label">Subject</span><span class="stat-value" style="font-size:0.75rem">{esc(ssl_data.get("cert_subject", "N/A"))}</span></div>
+        <div class="stat-row"><span class="stat-label">Issuer</span><span class="stat-value" style="font-size:0.75rem">{esc(ssl_data.get("cert_issuer", "N/A"))}</span></div>
+        <div class="stat-row"><span class="stat-label">Expires</span><span class="stat-value">{esc(ssl_data.get("cert_not_after", "N/A"))}</span></div>
+        <div class="stat-row"><span class="stat-label">Key Size</span><span class="stat-value">{esc(ssl_data.get("cert_key_size", "N/A"))}</span></div>
+        <div class="stat-row"><span class="stat-label">Signature</span><span class="stat-value" style="font-size:0.75rem">{esc(ssl_data.get("cert_signature_alg", "N/A"))}</span></div>
+        <div class="stat-row"><span class="stat-label">Chain</span><span class="stat-value">{esc(ssl_data.get("cert_chain_depth", "N/A"))}</span></div>
+    </div>''')
+            html_parts.append('</div>\n')
+
+        # Security headers checklist
+        all_hdrs = set(list(b_headers.keys()) + list(c_headers.keys()))
+        response_hdrs = sorted([h for h in all_hdrs if h.startswith('response_header:')])
+        removed_hdrs = sorted([h for h in all_hdrs if h.startswith('removed_header:')])
+
+        if response_hdrs or removed_hdrs:
+            html_parts.append('<h3>Security Headers</h3>\n')
+            html_parts.append('<table>\n<thead><tr><th>Header</th><th>Baseline</th><th>Candidate</th></tr></thead>\n<tbody>')
+            for hdr in response_hdrs + removed_hdrs:
+                hdr_name = hdr.split(':', 1)[1] if ':' in hdr else hdr
+                b_info = b_headers.get(hdr, {})
+                c_info = c_headers.get(hdr, {})
+                b_badge = 'badge-pass' if b_info.get('status') == 'PASS' else ('badge-fail' if b_info.get('status') == 'FAIL' else 'badge-warn')
+                c_badge = 'badge-pass' if c_info.get('status') == 'PASS' else ('badge-fail' if c_info.get('status') == 'FAIL' else 'badge-warn')
+                b_val = b_info.get('actual', 'N/A')
+                c_val = c_info.get('actual', 'N/A')
+                html_parts.append(f'<tr><td><code>{esc(hdr_name)}</code></td>')
+                if b_info:
+                    html_parts.append(f'<td><span class="badge {b_badge}">{b_info.get("status","")}</span> <code style="font-size:0.7rem">{esc(b_val)}</code></td>')
+                else:
+                    html_parts.append('<td style="color:var(--text-dim)">N/A</td>')
+                if c_info:
+                    html_parts.append(f'<td><span class="badge {c_badge}">{c_info.get("status","")}</span> <code style="font-size:0.7rem">{esc(c_val)}</code></td>')
+                else:
+                    html_parts.append('<td style="color:var(--text-dim)">N/A</td>')
+                html_parts.append('</tr>\n')
+            html_parts.append('</tbody></table>\n')
 
     # --- CLI Differences Section ---
     html_parts.append('<h2 id="diffs">CLI Differences</h2>\n')

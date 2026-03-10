@@ -69,11 +69,11 @@ echo ""
 
 "$SCRIPT_DIR/run-comprehensive-tests.sh" \
     "$BASELINE_IP" "$PASSWORD" "$OUTPUT_DIR/baseline-tests.json" \
-    "10.0.1.254" "10.0.1.115" "10.0.1.125" || true
+    "10.0.1.254" "10.0.1.115" "10.0.1.125" "10.0.1.105" || true
 
 "$SCRIPT_DIR/run-comprehensive-tests.sh" \
     "$CANDIDATE_IP" "$PASSWORD" "$OUTPUT_DIR/candidate-tests.json" \
-    "10.0.1.253" "10.0.1.116" "10.0.1.126" || true
+    "10.0.1.253" "10.0.1.116" "10.0.1.126" "10.0.1.106" || true
 
 # =========================================================================
 # PHASE 2: CLI Output Collection + Comparison

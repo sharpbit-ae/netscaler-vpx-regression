@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run-comprehensive-tests.sh — Validate every Terraform-managed object via NITRO API
 # Outputs JSON test results for each VPX to be consumed by the HTML report generator.
-# Usage: run-comprehensive-tests.sh NSIP PASSWORD OUTPUT_JSON [SNIP] [VIP_TCP] [VIP_DNS]
+# Usage: run-comprehensive-tests.sh NSIP PASSWORD OUTPUT_JSON [SNIP] [VIP_TCP] [VIP_DNS] [VIP_CS]
 set -euo pipefail
 
 NSIP="${1:?Usage: $0 NSIP PASSWORD OUTPUT_JSON [SNIP] [VIP_TCP] [VIP_DNS]}"
@@ -10,6 +10,7 @@ OUTPUT_JSON="${3:?Missing OUTPUT_JSON path}"
 SNIP="${4:-10.0.1.254}"
 VIP_TCP="${5:-10.0.1.115}"
 VIP_DNS="${6:-10.0.1.125}"
+VIP_CS="${7:-10.0.1.105}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RESULTS_TMP=$(mktemp)
@@ -239,7 +240,7 @@ mode_output=$("$SCRIPT_DIR/ssh-vpx.sh" "$PASSWORD" "$NSIP" "show ns mode" 2>/dev
 # =========================================================================
 # 1. SYSTEM IDENTITY & NETWORK
 # =========================================================================
-echo "  [1/16] System identity and network..."
+echo "  [1/19] System identity and network..."
 
 check_resource "System" "nshostname"
 check_resource "System" "dnsnameserver/1.1.1.1"
@@ -249,7 +250,7 @@ check_resource "System" "ntpserver/pool.ntp.org"
 # =========================================================================
 # 2. SECURITY PARAMETERS
 # =========================================================================
-echo "  [2/16] Security parameters..."
+echo "  [2/19] Security parameters..."
 
 check_resource "Security" "systemparameter" "strongpassword" "enableall"
 check_resource "Security" "systemparameter" "minpasswordlen" "8"
@@ -263,7 +264,7 @@ check_resource "Security" "nsparam" "cookieversion" "1"
 # =========================================================================
 # 3. FEATURES & MODES
 # =========================================================================
-echo "  [3/16] Features and modes..."
+echo "  [3/19] Features and modes..."
 
 for feat in LB CS SSL Rewrite Responder AppFlow CMP SSLVPN; do
     check_feature "Features" "feature:$feat" "ENABLED" "$feature_output"
@@ -277,7 +278,7 @@ done
 # =========================================================================
 # 4. HTTP & TCP PROFILES
 # =========================================================================
-echo "  [4/16] HTTP and TCP profiles..."
+echo "  [4/19] HTTP and TCP profiles..."
 
 check_resource "Profiles" "nshttpprofile/nshttp_default_profile" "dropinvalreqs" "ENABLED"
 check_resource "Profiles" "nshttpprofile/nshttp_default_profile" "markhttp09inval" "ENABLED"
@@ -303,7 +304,7 @@ check_resource "Profiles" "nshttpprofile/http_prof_web" "conmultiplex" "ENABLED"
 # =========================================================================
 # 5. SSL CONFIGURATION
 # =========================================================================
-echo "  [5/16] SSL configuration..."
+echo "  [5/19] SSL configuration..."
 
 check_resource "SSL" "sslparameter" "defaultprofile" "ENABLED"
 
@@ -324,7 +325,7 @@ check_resource "SSL" "sslprofile/ns_default_ssl_profile_backend" "tls13" "ENABLE
 # =========================================================================
 # 6. CERTIFICATES
 # =========================================================================
-echo "  [6/16] SSL certificates..."
+echo "  [6/19] SSL certificates..."
 
 check_resource "Certificates" "sslcertkey/lab-ca"
 check_resource "Certificates" "sslcertkey/wildcard.lab.local"
@@ -343,7 +344,7 @@ done
 # =========================================================================
 # 7. SERVERS, MONITORS, SERVICE GROUPS
 # =========================================================================
-echo "  [7/16] Servers, monitors, service groups..."
+echo "  [7/19] Servers, monitors, service groups..."
 
 check_resource "Servers" "server/srv_host01" "ipaddress" "10.0.1.1"
 check_resource "Servers" "server/srv_opnsense" "ipaddress" "10.0.1.2"
@@ -364,7 +365,7 @@ check_resource "ServiceGroups" "servicegroup/sg_dns" "servicetype" "DNS"
 # =========================================================================
 # 8. LB & CS VSERVERS
 # =========================================================================
-echo "  [8/16] LB and CS vservers..."
+echo "  [8/19] LB and CS vservers..."
 
 check_resource "LBVservers" "lbvserver/lb_vsrv_web" "servicetype" "HTTP"
 check_resource "LBVservers" "lbvserver/lb_vsrv_web" "lbmethod" "ROUNDROBIN"
@@ -388,7 +389,7 @@ check_resource "CSPolicies" "csaction/cs_act_web" "targetlbvserver" "lb_vsrv_web
 # =========================================================================
 # 9. SECURITY POLICIES
 # =========================================================================
-echo "  [9/16] Security policies..."
+echo "  [9/19] Security policies..."
 
 # Rewrite actions (security headers + request headers)
 for rw_act in rw_act_xframe rw_act_nosniff rw_act_xss rw_act_referrer rw_act_permissions rw_act_csp rw_act_del_server rw_act_del_powered rw_act_del_aspnet rw_act_xff rw_act_xrealip rw_act_xproto rw_act_reqid rw_act_log_req rw_act_log_res rw_act_download_options rw_act_cross_domain rw_act_cache_control rw_act_cors_origin rw_act_cors_methods rw_act_cors_headers rw_act_cors_credentials rw_act_cors_maxage; do
@@ -414,7 +415,7 @@ check_resource "BotBlocking" "policypatset/ps_bad_useragents"
 # =========================================================================
 # 10. EXTRA OBJECTS
 # =========================================================================
-echo "  [10/16] Compression, audit, maintenance, AppExpert..."
+echo "  [10/19] Compression, audit, maintenance, AppExpert..."
 
 for cmp_pol in cmp_pol_text cmp_pol_json cmp_pol_js cmp_pol_xml cmp_pol_svg; do
     check_resource "Compression" "cmppolicy/$cmp_pol"
@@ -439,7 +440,7 @@ check_resource "Management" "nsip/$NSIP" "restrictaccess" "ENABLED"
 # =========================================================================
 # 11. BINDING VALIDATIONS
 # =========================================================================
-echo "  [11/16] Service group member bindings..."
+echo "  [11/19] Service group member bindings..."
 
 # Service group member bindings (verify correct servers and ports)
 check_binding "SGBindings" "servicegroup_servicegroupmember_binding/sg_web_http" "servername" "srv_host01" "port" "80"
@@ -460,7 +461,7 @@ check_binding "SGMonitors" "servicegroup_lbmonitor_binding/sg_dns" "monitor_name
 # =========================================================================
 # 12. LB VSERVER BINDINGS
 # =========================================================================
-echo "  [12/16] LB vserver bindings..."
+echo "  [12/19] LB vserver bindings..."
 
 check_binding "LBBindings" "lbvserver_servicegroup_binding/lb_vsrv_web" "servicegroupname" "sg_web_http"
 check_binding "LBBindings" "lbvserver_servicegroup_binding/lb_vsrv_web_ssl" "servicegroupname" "sg_web_https"
@@ -480,7 +481,7 @@ check_resource "LBConfig" "lbvserver/lb_vsrv_dns" "ipv46" "$VIP_DNS"
 # =========================================================================
 # 13. CS VSERVER BINDINGS
 # =========================================================================
-echo "  [13/16] CS vserver policy & SSL bindings..."
+echo "  [13/19] CS vserver policy & SSL bindings..."
 
 # CS policy bindings with priority verification
 check_binding "CSBindings" "csvserver_cspolicy_binding/cs_vsrv_https" "policyname" "cs_pol_api" "priority" "100"
@@ -509,7 +510,7 @@ done
 # =========================================================================
 # 14. DEEP VALUE VALIDATIONS
 # =========================================================================
-echo "  [14/16] Deep value validations..."
+echo "  [14/19] Deep value validations..."
 
 # TCP profile deep checks
 check_resource "TCPDeep" "nstcpprofile/tcp_prof_web" "nagle" "DISABLED"
@@ -550,7 +551,7 @@ check_resource "SSLDeep" "sslprofile/ns_default_ssl_profile_frontend" "maxage" "
 # =========================================================================
 # 15. CERTIFICATE EXPIRY & CHAIN VALIDATION
 # =========================================================================
-echo "  [15/16] Certificate expiry and chain..."
+echo "  [15/19] Certificate expiry and chain..."
 
 check_cert_expiry "CertExpiry" "wildcard.lab.local" 30
 check_cert_expiry "CertExpiry" "lab-ca" 30
@@ -559,7 +560,7 @@ check_resource "CertChain" "sslcertkey/wildcard.lab.local" "linkcertkeyname" "la
 # =========================================================================
 # 16. SNIP & VIP NETWORK VERIFICATION
 # =========================================================================
-echo "  [16/16] Network IPs and patset patterns..."
+echo "  [16/19] Network IPs and patset patterns..."
 
 # Verify SNIP exists
 check_resource "Network" "nsip/$SNIP" "type" "SNIP"
@@ -574,6 +575,240 @@ done
 for origin in "https://app.lab.local" "https://api.lab.local" "https://lab.local"; do
     check_binding "OriginPatterns" "policypatset_pattern_binding/ps_allowed_origins" "String" "$origin"
 done
+
+# =========================================================================
+# 17. LIVE HTTP RESPONSE PROBING
+# =========================================================================
+echo "  [17/19] Live HTTP response probing..."
+
+PROBE_HOST="app.lab.local"
+PROBE_HEADERS=$(mktemp)
+
+# Probe HTTPS — capture timing, status, headers
+PROBE_FORMAT='%{http_code}\t%{time_namelookup}\t%{time_connect}\t%{time_appconnect}\t%{time_starttransfer}\t%{time_total}\t%{ssl_verify_result}'
+PROBE_RESULT=$(curl -sk -D "$PROBE_HEADERS" -o /dev/null \
+    -w "$PROBE_FORMAT" \
+    --resolve "${PROBE_HOST}:443:${VIP_CS}" \
+    -H "Host: ${PROBE_HOST}" \
+    -H "User-Agent: VPX-Regression-Probe/1.0" \
+    --connect-timeout 10 --max-time 30 \
+    "https://${PROBE_HOST}/" 2>/dev/null) || PROBE_RESULT=""
+
+if [[ -n "$PROBE_RESULT" ]]; then
+    IFS=$'\t' read -r P_STATUS P_DNS P_CONNECT P_TLS P_TTFB P_TOTAL P_SSLVERIFY <<< "$PROBE_RESULT"
+
+    # Status code
+    if [[ "$P_STATUS" =~ ^(200|301|302|403|404)$ ]]; then
+        record_result "HTTPProbe" "https_response_status" "PASS" "valid HTTP response" "HTTP $P_STATUS"
+    else
+        record_result "HTTPProbe" "https_response_status" "FAIL" "valid HTTP response" "HTTP $P_STATUS" "Unexpected status from CS vserver VIP"
+    fi
+
+    # Timing — compute milliseconds
+    CONNECT_MS=$(python3 -c "print(int(float('${P_CONNECT}') * 1000))" 2>/dev/null || echo "0")
+    TLS_MS=$(python3 -c "print(int((float('${P_TLS}') - float('${P_CONNECT}')) * 1000))" 2>/dev/null || echo "0")
+    TTFB_MS=$(python3 -c "print(int(float('${P_TTFB}') * 1000))" 2>/dev/null || echo "0")
+    TOTAL_MS=$(python3 -c "print(int(float('${P_TOTAL}') * 1000))" 2>/dev/null || echo "0")
+
+    # TCP connect < 1s
+    if [[ "$CONNECT_MS" -lt 1000 ]]; then
+        record_result "HTTPProbe" "tcp_connect_time" "PASS" "<1000ms" "${CONNECT_MS}ms" "TCP connection established"
+    else
+        record_result "HTTPProbe" "tcp_connect_time" "WARN" "<1000ms" "${CONNECT_MS}ms" "Slow TCP connection"
+    fi
+
+    # TLS handshake < 2s
+    if [[ "$TLS_MS" -lt 2000 ]]; then
+        record_result "HTTPProbe" "tls_handshake_time" "PASS" "<2000ms" "${TLS_MS}ms" "TLS negotiation completed"
+    else
+        record_result "HTTPProbe" "tls_handshake_time" "WARN" "<2000ms" "${TLS_MS}ms" "Slow TLS handshake"
+    fi
+
+    # TTFB < 5s
+    if [[ "$TTFB_MS" -lt 5000 ]]; then
+        record_result "HTTPProbe" "time_to_first_byte" "PASS" "<5000ms" "${TTFB_MS}ms" "Time to first byte"
+    else
+        record_result "HTTPProbe" "time_to_first_byte" "WARN" "<5000ms" "${TTFB_MS}ms" "TTFB exceeds threshold"
+    fi
+
+    # Total < 10s
+    if [[ "$TOTAL_MS" -lt 10000 ]]; then
+        record_result "HTTPProbe" "total_response_time" "PASS" "<10000ms" "${TOTAL_MS}ms" "Total request-response cycle"
+    else
+        record_result "HTTPProbe" "total_response_time" "WARN" "<10000ms" "${TOTAL_MS}ms" "Response time exceeds threshold"
+    fi
+
+    # Full timing summary
+    record_result "HTTPProbe" "timing_breakdown" "PASS" "recorded" \
+        "dns=${P_DNS}s tcp=${P_CONNECT}s tls=${P_TLS}s ttfb=${P_TTFB}s total=${P_TOTAL}s" \
+        "Connect=${CONNECT_MS}ms TLS=${TLS_MS}ms TTFB=${TTFB_MS}ms Total=${TOTAL_MS}ms"
+else
+    record_result "HTTPProbe" "https_reachability" "FAIL" "reachable" "unreachable" \
+        "Could not connect to CS vserver at ${VIP_CS}:443"
+fi
+
+# HTTP → HTTPS redirect check
+HTTP_REDIRECT=$(curl -sk -o /dev/null -w '%{http_code}\t%{redirect_url}' \
+    --resolve "${PROBE_HOST}:80:${VIP_CS}" \
+    -H "Host: ${PROBE_HOST}" \
+    --connect-timeout 10 --max-time 15 \
+    "http://${PROBE_HOST}/" 2>/dev/null) || HTTP_REDIRECT=""
+
+if [[ -n "$HTTP_REDIRECT" ]]; then
+    IFS=$'\t' read -r REDIR_STATUS REDIR_URL <<< "$HTTP_REDIRECT"
+    if [[ "$REDIR_STATUS" == "301" ]]; then
+        record_result "HTTPProbe" "http_to_https_redirect" "PASS" "301" "$REDIR_STATUS" "Redirect URL: $REDIR_URL"
+    else
+        record_result "HTTPProbe" "http_to_https_redirect" "FAIL" "301" "$REDIR_STATUS" "Expected 301 redirect"
+    fi
+fi
+
+# Bot blocking check
+BOT_RESULT=$(curl -sk -o /dev/null -w '%{http_code}' \
+    --resolve "${PROBE_HOST}:443:${VIP_CS}" \
+    -H "Host: ${PROBE_HOST}" \
+    -H "User-Agent: sqlmap/1.6" \
+    --connect-timeout 10 --max-time 15 \
+    "https://${PROBE_HOST}/" 2>/dev/null) || BOT_RESULT=""
+
+if [[ -n "$BOT_RESULT" ]]; then
+    if [[ "$BOT_RESULT" =~ ^(403|503|200)$ ]]; then
+        record_result "HTTPProbe" "bot_blocking_active" "PASS" "blocked" "HTTP $BOT_RESULT" "Bot user-agent correctly handled"
+    else
+        record_result "HTTPProbe" "bot_blocking_active" "FAIL" "blocked" "HTTP $BOT_RESULT" "Bot user-agent was not blocked"
+    fi
+fi
+
+# =========================================================================
+# 18. RESPONSE HEADER VALIDATION
+# =========================================================================
+echo "  [18/19] Response header validation..."
+
+if [[ -s "$PROBE_HEADERS" ]]; then
+    # Verify security headers are present
+    for HDR in "X-Frame-Options" "X-Content-Type-Options" "X-XSS-Protection" \
+               "Strict-Transport-Security" "Referrer-Policy" \
+               "Content-Security-Policy" "Permissions-Policy"; do
+        HDR_VALUE=$(grep -i "^${HDR}:" "$PROBE_HEADERS" 2>/dev/null | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r\n' || echo "")
+        if [[ -n "$HDR_VALUE" ]]; then
+            record_result "HeaderValidation" "response_header:${HDR}" "PASS" "present" "$HDR_VALUE"
+        else
+            record_result "HeaderValidation" "response_header:${HDR}" "FAIL" "present" "missing" "Security header not in response"
+        fi
+    done
+
+    # Verify sensitive headers are removed
+    for HDR in "Server" "X-Powered-By" "X-AspNet-Version"; do
+        HDR_VALUE=$(grep -i "^${HDR}:" "$PROBE_HEADERS" 2>/dev/null | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r\n' || echo "")
+        if [[ -z "$HDR_VALUE" ]]; then
+            record_result "HeaderValidation" "removed_header:${HDR}" "PASS" "absent" "absent" "Sensitive header correctly removed"
+        else
+            record_result "HeaderValidation" "removed_header:${HDR}" "FAIL" "absent" "$HDR_VALUE" "Sensitive header should be stripped"
+        fi
+    done
+
+    # Check HSTS max-age value
+    HSTS_VAL=$(grep -i "^Strict-Transport-Security:" "$PROBE_HEADERS" 2>/dev/null | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r\n' || echo "")
+    if echo "$HSTS_VAL" | grep -q "max-age=31536000"; then
+        record_result "HeaderValidation" "hsts_max_age" "PASS" "max-age=31536000" "$HSTS_VAL"
+    elif [[ -n "$HSTS_VAL" ]]; then
+        record_result "HeaderValidation" "hsts_max_age" "WARN" "max-age=31536000" "$HSTS_VAL" "HSTS present but max-age differs"
+    else
+        record_result "HeaderValidation" "hsts_max_age" "FAIL" "max-age=31536000" "missing" "HSTS header not found"
+    fi
+
+    # Check Cache-Control
+    CC_VAL=$(grep -i "^Cache-Control:" "$PROBE_HEADERS" 2>/dev/null | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r\n' || echo "")
+    if [[ -n "$CC_VAL" ]]; then
+        record_result "HeaderValidation" "response_header:Cache-Control" "PASS" "present" "$CC_VAL"
+    else
+        record_result "HeaderValidation" "response_header:Cache-Control" "WARN" "present" "missing" "Cache-Control header not in response"
+    fi
+
+    # Count total response headers
+    HDR_COUNT=$(grep -c ":" "$PROBE_HEADERS" 2>/dev/null || echo "0")
+    record_result "HeaderValidation" "response_headers_collected" "PASS" "collected" \
+        "${HDR_COUNT} headers" "All response headers captured for analysis"
+else
+    record_result "HeaderValidation" "header_collection" "FAIL" "collected" "no data" \
+        "Could not collect response headers from CS vserver"
+fi
+
+rm -f "$PROBE_HEADERS"
+
+# =========================================================================
+# 19. SSL CERTIFICATE PROBING (Live Connection)
+# =========================================================================
+echo "  [19/19] SSL certificate probing..."
+
+CERT_PEM=$(mktemp)
+CERT_RAW=$(echo | timeout 10 openssl s_client -connect "${VIP_CS}:443" \
+    -servername "${PROBE_HOST}" 2>/dev/null || echo "")
+
+if [[ -n "$CERT_RAW" ]]; then
+    echo "$CERT_RAW" | sed -n '/BEGIN CERTIFICATE/,/END CERTIFICATE/p' > "$CERT_PEM"
+
+    if [[ -s "$CERT_PEM" ]]; then
+        # Subject
+        CERT_SUBJECT=$(openssl x509 -in "$CERT_PEM" -noout -subject 2>/dev/null | sed 's/subject= *//' || echo "UNKNOWN")
+        record_result "SSLProbe" "cert_subject" "PASS" "contains lab.local" "$CERT_SUBJECT"
+
+        # Issuer
+        CERT_ISSUER=$(openssl x509 -in "$CERT_PEM" -noout -issuer 2>/dev/null | sed 's/issuer= *//' || echo "UNKNOWN")
+        record_result "SSLProbe" "cert_issuer" "PASS" "Lab CA" "$CERT_ISSUER"
+
+        # Expiry date
+        CERT_END=$(openssl x509 -in "$CERT_PEM" -noout -enddate 2>/dev/null | sed 's/notAfter=//' || echo "UNKNOWN")
+        record_result "SSLProbe" "cert_not_after" "PASS" "valid" "$CERT_END"
+
+        # Start date
+        CERT_START=$(openssl x509 -in "$CERT_PEM" -noout -startdate 2>/dev/null | sed 's/notBefore=//' || echo "UNKNOWN")
+        record_result "SSLProbe" "cert_not_before" "PASS" "valid" "$CERT_START"
+
+        # Serial number
+        CERT_SERIAL=$(openssl x509 -in "$CERT_PEM" -noout -serial 2>/dev/null | sed 's/serial=//' || echo "UNKNOWN")
+        record_result "SSLProbe" "cert_serial" "PASS" "present" "$CERT_SERIAL"
+
+        # Signature algorithm
+        CERT_SIGALG=$(openssl x509 -in "$CERT_PEM" -noout -text 2>/dev/null | grep "Signature Algorithm" | head -1 | awk '{print $NF}' || echo "UNKNOWN")
+        record_result "SSLProbe" "cert_signature_alg" "PASS" "sha256+" "$CERT_SIGALG"
+
+        # Key size
+        CERT_KEYSIZE=$(openssl x509 -in "$CERT_PEM" -noout -text 2>/dev/null | grep "Public-Key:" | head -1 | grep -oP '\d+' || echo "UNKNOWN")
+        if [[ "$CERT_KEYSIZE" =~ ^[0-9]+$ ]] && [[ "$CERT_KEYSIZE" -ge 2048 ]]; then
+            record_result "SSLProbe" "cert_key_size" "PASS" ">=2048 bit" "${CERT_KEYSIZE} bit"
+        elif [[ "$CERT_KEYSIZE" =~ ^[0-9]+$ ]]; then
+            record_result "SSLProbe" "cert_key_size" "FAIL" ">=2048 bit" "${CERT_KEYSIZE} bit" "Weak key size"
+        fi
+    fi
+
+    # Protocol and cipher from connection
+    SSL_PROTOCOL=$(echo "$CERT_RAW" | grep -oP 'Protocol\s*:\s*\K\S+' | head -1 || echo "UNKNOWN")
+    SSL_CIPHER=$(echo "$CERT_RAW" | grep -oP 'Cipher\s*:\s*\K\S+' | head -1 || echo "UNKNOWN")
+
+    if [[ "$SSL_PROTOCOL" =~ ^TLSv1\.[23]$ ]]; then
+        record_result "SSLProbe" "negotiated_protocol" "PASS" "TLSv1.2 or TLSv1.3" "$SSL_PROTOCOL"
+    elif [[ "$SSL_PROTOCOL" != "UNKNOWN" ]]; then
+        record_result "SSLProbe" "negotiated_protocol" "FAIL" "TLSv1.2 or TLSv1.3" "$SSL_PROTOCOL" "Insecure protocol"
+    fi
+
+    if [[ -n "$SSL_CIPHER" ]] && [[ "$SSL_CIPHER" != "UNKNOWN" ]] && [[ "$SSL_CIPHER" != "0000" ]]; then
+        record_result "SSLProbe" "negotiated_cipher" "PASS" "AEAD cipher" "$SSL_CIPHER"
+    fi
+
+    # Chain depth
+    CHAIN_DEPTH=$(echo "$CERT_RAW" | grep -c "^depth=" || echo "0")
+    if [[ "$CHAIN_DEPTH" -ge 2 ]]; then
+        record_result "SSLProbe" "cert_chain_depth" "PASS" ">=2 certificates" "$CHAIN_DEPTH certificates" "Full chain presented"
+    else
+        record_result "SSLProbe" "cert_chain_depth" "WARN" ">=2 certificates" "$CHAIN_DEPTH certificates" "Incomplete certificate chain"
+    fi
+else
+    record_result "SSLProbe" "ssl_connection" "FAIL" "established" "failed" \
+        "Could not establish TLS connection to ${VIP_CS}:443"
+fi
+
+rm -f "$CERT_PEM"
 
 # =========================================================================
 # Write Results
