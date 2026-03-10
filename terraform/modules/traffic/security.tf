@@ -528,7 +528,7 @@ resource "citrixadc_csvserver_responderpolicy_binding" "cors_preflight" {
 resource "citrixadc_responderaction" "hardened_503" {
   name   = "rs_act_hardened_503"
   type   = "respondwith"
-  target = "\"HTTP/1.1 503 Service Unavailable\\r\\nX-Frame-Options: DENY\\r\\nX-Content-Type-Options: nosniff\\r\\nX-XSS-Protection: 1; mode=block\\r\\nReferrer-Policy: strict-origin-when-cross-origin\\r\\nPermissions-Policy: geolocation=(), camera=(), microphone=()\\r\\nContent-Security-Policy: default-src 'self'\\r\\nStrict-Transport-Security: max-age=31536000; includeSubDomains; preload\\r\\nCache-Control: no-store, no-cache\\r\\nContent-Type: text/html\\r\\nContent-Length: 63\\r\\n\\r\\n<html><body><h1>503 Service Unavailable</h1></body></html>\""
+  target = "\"HTTP/1.1 503 Service Unavailable\\r\\nX-Frame-Options: DENY\\r\\nX-Content-Type-Options: nosniff\\r\\nX-XSS-Protection: 1; mode=block\\r\\nReferrer-Policy: strict-origin-when-cross-origin\\r\\nPermissions-Policy: geolocation=(), camera=(), microphone=()\\r\\nContent-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'\\r\\nStrict-Transport-Security: max-age=31536000; includeSubDomains; preload\\r\\nCache-Control: no-store, no-cache\\r\\nContent-Type: text/html\\r\\nContent-Length: 63\\r\\n\\r\\n<html><body><h1>503 Service Unavailable</h1></body></html>\""
 }
 
 resource "citrixadc_responderpolicy" "hardened_503" {
@@ -613,12 +613,12 @@ resource "citrixadc_policypatset_pattern_binding" "ua_python" {
 resource "citrixadc_responderaction" "block_bot" {
   name   = "rs_act_block_bot"
   type   = "respondwith"
-  target = "\"HTTP/1.1 403 Forbidden\\r\\nX-Frame-Options: DENY\\r\\nX-Content-Type-Options: nosniff\\r\\nStrict-Transport-Security: max-age=31536000; includeSubDomains; preload\\r\\nContent-Length: 0\\r\\n\\r\\n\""
+  target = "\"HTTP/1.1 403 Forbidden\\r\\nX-Frame-Options: DENY\\r\\nX-Content-Type-Options: nosniff\\r\\nX-XSS-Protection: 1; mode=block\\r\\nReferrer-Policy: strict-origin-when-cross-origin\\r\\nPermissions-Policy: geolocation=(), camera=(), microphone=()\\r\\nContent-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'\\r\\nStrict-Transport-Security: max-age=31536000; includeSubDomains; preload\\r\\nCache-Control: no-store, no-cache\\r\\nContent-Length: 0\\r\\n\\r\\n\""
 }
 
 resource "citrixadc_responderpolicy" "block_bot" {
   name   = "rs_pol_block_bot"
-  rule   = "HTTP.REQ.HEADER(\"User-Agent\").CONTAINS_ANY(\"ps_bad_useragents\")"
+  rule   = "HTTP.REQ.HEADER(\"User-Agent\").TO_LOWER.CONTAINS_ANY(\"ps_bad_useragents\")"
   action = citrixadc_responderaction.block_bot.name
 }
 
