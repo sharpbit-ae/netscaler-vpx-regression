@@ -1,3 +1,5 @@
+[![Build Status](https://dev.azure.com/meyuy43h2/netscaler-vpx-regression/_apis/build/status/VPX%20Firmware%20Regression?branchName=main)](https://dev.azure.com/meyuy43h2/netscaler-vpx-regression/_build/latest?definitionId=2&branchName=main)
+
 # Automated Regression Testing for NetScaler VPX Firmware Upgrades
 
 Firmware upgrades on network appliances are high-stakes changes. A new build might alter TLS negotiation behavior, break a rewrite policy, silently reorder cipher suites, or change how a health monitor evaluates backend responses. In production, these differences surface as outages. The standard approach — upgrade a single device, run a few manual checks, and hope nothing broke — doesn't scale and doesn't inspire confidence. You need a way to know exactly what changed before a single production packet is affected.

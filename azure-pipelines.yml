@@ -1,5 +1,13 @@
 trigger: none
 
+# ── Scheduled nightly run (weekdays 02:00 UTC) ──
+schedules:
+  - cron: "0 2 * * 1-5"
+    displayName: "Nightly regression (demo)"
+    branches:
+      include: [main]
+    always: false  # only if code changed
+
 parameters:
   - name: demoMode
     displayName: "Demo mode (generate sample report without VPX deployment)"
@@ -14,14 +22,23 @@ parameters:
     type: string
     default: "/home/aeonadmin/vpx/NSVPX-KVM-14.1-66.54_nc_64.tgz"
 
+# ── Variable group for shared secrets ──
 variables:
-  VM_STORAGE_DIR: /home/vm-data
-  BASELINE_NAME: vpx-baseline
-  CANDIDATE_NAME: vpx-candidate
-  BASELINE_IP: 10.0.1.5
-  CANDIDATE_IP: 10.0.1.6
-  BOOT_TIMEOUT: "180"
-  CERT_DIR: /tmp/vpx-pipeline-certs
+  - group: vpx-secrets
+  - name: VM_STORAGE_DIR
+    value: /home/vm-data
+  - name: BASELINE_NAME
+    value: vpx-baseline
+  - name: CANDIDATE_NAME
+    value: vpx-candidate
+  - name: BASELINE_IP
+    value: 10.0.1.5
+  - name: CANDIDATE_IP
+    value: 10.0.1.6
+  - name: BOOT_TIMEOUT
+    value: "180"
+  - name: CERT_DIR
+    value: /tmp/vpx-pipeline-certs
 
 stages:
   # ================================================================
@@ -41,6 +58,14 @@ stages:
             inputs:
               targetType: inline
               script: |
+                SECONDS=0
+                echo "╔══════════════════════════════════════════════════════╗"
+                echo "║  VPX Firmware Regression Pipeline                    ║"
+                echo "║  Mode: ${{ parameters.demoMode }}                    ║"
+                echo "║  Agent: $(Agent.MachineName)                         ║"
+                echo "║  Started: $(date -u '+%Y-%m-%d %H:%M:%S UTC')        ║"
+                echo "╚══════════════════════════════════════════════════════╝"
+                echo ""
                 echo "Checking required tools..."
                 if [ "${{ parameters.demoMode }}" = "True" ]; then
                   echo "  [DEMO MODE] Skipping KVM tool checks"
@@ -70,6 +95,8 @@ stages:
                   echo "Checking network..."
                   sudo virsh net-info opn_wan
                 fi
+                echo ""
+                echo "##[section]Setup completed in ${SECONDS}s"
 
           - task: Bash@3
             displayName: "Clean up leftover VMs from previous runs"
@@ -118,6 +145,7 @@ stages:
             inputs:
               targetType: inline
               script: |
+                SECONDS=0
                 scripts/deploy-vpx.sh \
                   --name "$(BASELINE_NAME)" \
                   --tarball "${{ parameters.baselineTarball }}" \
@@ -130,6 +158,7 @@ stages:
                   --storage-dir "$(VM_STORAGE_DIR)" \
                   --boot-timeout "$(BOOT_TIMEOUT)" \
                   --deploy-timeout 1200
+                echo "##[section]Baseline deploy completed in ${SECONDS}s"
             env:
               NSROOT_PASSWORD: $(NSROOT_PASSWORD)
               RPC_PASSWORD: $(RPC_PASSWORD)
@@ -154,6 +183,7 @@ stages:
             inputs:
               targetType: inline
               script: |
+                SECONDS=0
                 scripts/deploy-vpx.sh \
                   --name "$(CANDIDATE_NAME)" \
                   --tarball "${{ parameters.candidateTarball }}" \
@@ -166,6 +196,7 @@ stages:
                   --storage-dir "$(VM_STORAGE_DIR)" \
                   --boot-timeout "$(BOOT_TIMEOUT)" \
                   --deploy-timeout 1200
+                echo "##[section]Candidate deploy completed in ${SECONDS}s"
             env:
               NSROOT_PASSWORD: $(NSROOT_PASSWORD)
               RPC_PASSWORD: $(RPC_PASSWORD)
@@ -201,6 +232,7 @@ stages:
             inputs:
               targetType: inline
               script: |
+                SECONDS=0
                 echo "╔══════════════════════════════════════════════════════════╗"
                 echo "║  DEMO MODE — Generating sample regression data          ║"
                 echo "║  In production, this stage runs NITRO API tests against  ║"
@@ -208,6 +240,7 @@ stages:
                 echo "╚══════════════════════════════════════════════════════════╝"
                 echo ""
                 python3 scripts/generate-sample-data.py "$(Build.ArtifactStagingDirectory)/regression-output"
+                echo "##[section]Sample data generated in ${SECONDS}s"
 
           - task: Bash@3
             displayName: "[Demo] Generate HTML report"
@@ -215,6 +248,7 @@ stages:
             inputs:
               targetType: inline
               script: |
+                SECONDS=0
                 OUT="$(Build.ArtifactStagingDirectory)/regression-output"
                 python3 scripts/generate-html-report.py \
                   "$OUT/baseline.json" \
@@ -226,6 +260,7 @@ stages:
                 echo ""
                 echo "Report generated:"
                 ls -lh "$OUT/regression-report.html"
+                echo "##[section]HTML report generated in ${SECONDS}s"
 
           # --- LIVE MODE: Run real tests against VPX instances ---
           - task: Bash@3
@@ -234,11 +269,37 @@ stages:
             inputs:
               targetType: inline
               script: |
+                SECONDS=0
                 scripts/run-regression-tests.sh \
                   "$(BASELINE_IP)" "$(CANDIDATE_IP)" "$NSROOT_PASSWORD" "$(Build.ArtifactStagingDirectory)/regression-output"
+                echo "##[section]Regression tests completed in ${SECONDS}s"
             env:
               NSROOT_PASSWORD: $(NSROOT_PASSWORD)
 
+          # --- JUnit XML for Azure DevOps Tests tab ---
+          - task: Bash@3
+            displayName: "Generate JUnit test results"
+            condition: always()
+            inputs:
+              targetType: inline
+              script: |
+                OUT="$(Build.ArtifactStagingDirectory)/regression-output"
+                python3 scripts/generate-junit-report.py \
+                  "$OUT/baseline.json" \
+                  "$OUT/candidate.json" \
+                  "$OUT/junit"
+
+          - task: PublishTestResults@2
+            displayName: "Publish test results to Tests tab"
+            condition: always()
+            inputs:
+              testResultsFormat: JUnit
+              testResultsFiles: "$(Build.ArtifactStagingDirectory)/regression-output/junit/*.xml"
+              mergeTestResults: true
+              testRunTitle: "VPX Firmware Regression — $(Build.BuildNumber)"
+              failTaskOnFailedTests: true
+
+          # --- Publish HTML report as artifact ---
           - task: PublishBuildArtifacts@1
             displayName: "Publish regression report"
             condition: always()
@@ -246,6 +307,43 @@ stages:
               pathToPublish: $(Build.ArtifactStagingDirectory)/regression-output
               artifactName: regression-report
               publishLocation: Container
+
+          # --- Pipeline summary ---
+          - task: Bash@3
+            displayName: "Pipeline summary"
+            condition: always()
+            inputs:
+              targetType: inline
+              script: |
+                OUT="$(Build.ArtifactStagingDirectory)/regression-output"
+                echo ""
+                echo "╔══════════════════════════════════════════════════════╗"
+                echo "║  PIPELINE SUMMARY                                    ║"
+                echo "╚══════════════════════════════════════════════════════╝"
+                if [ -f "$OUT/baseline.json" ]; then
+                  python3 -c "
+                import json
+                b = json.load(open('$OUT/baseline.json'))
+                c = json.load(open('$OUT/candidate.json'))
+                total = b['total'] + c['total']
+                passed = b['passed'] + c['passed']
+                failed = b['failed'] + c['failed']
+                warns = b.get('warnings', 0) + c.get('warnings', 0)
+                print(f'  Baseline:  {b[\"total\"]} tests ({b[\"passed\"]}P / {b[\"failed\"]}F / {b.get(\"warnings\",0)}W) — {b.get(\"nsip\",\"?\")}')
+                print(f'  Candidate: {c[\"total\"]} tests ({c[\"passed\"]}P / {c[\"failed\"]}F / {c.get(\"warnings\",0)}W) — {c.get(\"nsip\",\"?\")}')
+                print(f'  ─────────────────────────────────────────')
+                print(f'  Total:     {total} assertions, {passed} passed, {failed} failed, {warns} warnings')
+                print(f'  Result:    {\"PASS ✓\" if failed == 0 else \"FAIL ✗\"} ')
+                "
+                fi
+                echo ""
+                if [ -f "$OUT/regression-report.html" ]; then
+                  SIZE=$(du -h "$OUT/regression-report.html" | cut -f1)
+                  echo "  Report:    regression-report.html ($SIZE)"
+                fi
+                echo "  Build:     $(Build.BuildNumber)"
+                echo "  Agent:     $(Agent.MachineName)"
+                echo "  Finished:  $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 
   # ================================================================
   # Stage 4: Cleanup (always runs, skipped in demo mode)
