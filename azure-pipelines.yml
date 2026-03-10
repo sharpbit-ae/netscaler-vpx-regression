@@ -13,6 +13,10 @@ parameters:
     displayName: "Demo mode (generate sample report without VPX deployment)"
     type: boolean
     default: true
+  - name: skipDeploy
+    displayName: "Skip VPX deployment (reuse already-running VMs)"
+    type: boolean
+    default: false
   - name: baselineTarball
     displayName: "Baseline firmware tarball path"
     type: string
@@ -62,6 +66,7 @@ stages:
                 echo "╔══════════════════════════════════════════════════════╗"
                 echo "║  VPX Firmware Regression Pipeline                    ║"
                 echo "║  Mode: ${{ parameters.demoMode }}                    ║"
+                echo "║  Skip Deploy: ${{ parameters.skipDeploy }}           ║"
                 echo "║  Agent: $(Agent.MachineName)                         ║"
                 echo "║  Started: $(date -u '+%Y-%m-%d %H:%M:%S UTC')        ║"
                 echo "╚══════════════════════════════════════════════════════╝"
@@ -99,8 +104,40 @@ stages:
                 echo "##[section]Setup completed in ${SECONDS}s"
 
           - task: Bash@3
+            displayName: "Check if VPXs are already running"
+            condition: and(eq('${{ parameters.demoMode }}', 'False'), eq('${{ parameters.skipDeploy }}', 'True'))
+            inputs:
+              targetType: inline
+              script: |
+                echo "Checking if VPX instances are already deployed..."
+                FAIL=0
+                for VPX_IP in "$(BASELINE_IP)" "$(CANDIDATE_IP)"; do
+                  HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" \
+                    -u "nsroot:$NSROOT_PASSWORD" \
+                    "https://${VPX_IP}/nitro/v1/config/nsversion" 2>/dev/null || echo "000")
+                  if [[ "$HTTP_CODE" == "200" ]]; then
+                    VERSION=$(curl -sk -u "nsroot:$NSROOT_PASSWORD" \
+                      "https://${VPX_IP}/nitro/v1/config/nsversion" 2>/dev/null \
+                      | python3 -c "import sys,json; print(json.load(sys.stdin)['nsversion']['version'])" 2>/dev/null || echo "unknown")
+                    echo "  [OK] $VPX_IP — running ($VERSION)"
+                  else
+                    echo "  [FAIL] $VPX_IP — not reachable (HTTP $HTTP_CODE)"
+                    FAIL=1
+                  fi
+                done
+                if [[ "$FAIL" == "1" ]]; then
+                  echo ""
+                  echo "##[error]skipDeploy=true but one or more VPXs are not reachable. Disable skipDeploy to provision new VMs."
+                  exit 1
+                fi
+                echo ""
+                echo "Both VPXs are running — skipping VM provisioning."
+            env:
+              NSROOT_PASSWORD: $(NSROOT_PASSWORD)
+
+          - task: Bash@3
             displayName: "Clean up leftover VMs from previous runs"
-            condition: eq('${{ parameters.demoMode }}', 'False')
+            condition: and(eq('${{ parameters.demoMode }}', 'False'), eq('${{ parameters.skipDeploy }}', 'False'))
             inputs:
               targetType: inline
               script: |
@@ -126,89 +163,167 @@ stages:
               WILDCARD_KEY: $(WILDCARD_KEY)
 
   # ================================================================
-  # Stage 2a: Deploy Baseline VPX — KVM + Terraform
+  # Stage 2a: Provision Baseline VPX VM (KVM only — no Terraform)
   # ================================================================
-  - stage: DeployBaseline
-    displayName: "Phase 2a: Deploy Baseline VPX"
+  - stage: ProvisionBaseline
+    displayName: "Phase 2a: Provision Baseline VM"
     dependsOn: Setup
-    condition: and(succeeded(), eq('${{ parameters.demoMode }}', 'False'))
+    condition: and(succeeded(), eq('${{ parameters.demoMode }}', 'False'), eq('${{ parameters.skipDeploy }}', 'False'))
     jobs:
-      - job: Baseline
-        displayName: "Baseline (14.1-60.57)"
+      - job: Provision
+        displayName: "KVM: Baseline (14.1-56.74)"
         pool: Default
-        timeoutInMinutes: 30
+        timeoutInMinutes: 15
         steps:
           - checkout: self
 
           - task: Bash@3
-            displayName: "Deploy VPX onto KVM and configure via Terraform"
+            displayName: "Provision VPX VM on KVM"
             inputs:
               targetType: inline
               script: |
                 SECONDS=0
-                scripts/deploy-vpx.sh \
+                scripts/provision-vpx.sh \
                   --name "$(BASELINE_NAME)" \
                   --tarball "${{ parameters.baselineTarball }}" \
+                  --ip "$(BASELINE_IP)" \
+                  --password "$NSROOT_PASSWORD" \
+                  --storage-dir "$(VM_STORAGE_DIR)" \
+                  --boot-timeout "$(BOOT_TIMEOUT)"
+                echo "##[section]Baseline VM provisioned in ${SECONDS}s"
+            env:
+              NSROOT_PASSWORD: $(NSROOT_PASSWORD)
+
+  # ================================================================
+  # Stage 2b: Provision Candidate VPX VM (KVM only — no Terraform)
+  # ================================================================
+  - stage: ProvisionCandidate
+    displayName: "Phase 2b: Provision Candidate VM"
+    dependsOn: Setup
+    condition: and(succeeded(), eq('${{ parameters.demoMode }}', 'False'), eq('${{ parameters.skipDeploy }}', 'False'))
+    jobs:
+      - job: Provision
+        displayName: "KVM: Candidate (14.1-60.57)"
+        pool: Default
+        timeoutInMinutes: 15
+        steps:
+          - checkout: self
+
+          - task: Bash@3
+            displayName: "Provision VPX VM on KVM"
+            inputs:
+              targetType: inline
+              script: |
+                SECONDS=0
+                scripts/provision-vpx.sh \
+                  --name "$(CANDIDATE_NAME)" \
+                  --tarball "${{ parameters.candidateTarball }}" \
+                  --ip "$(CANDIDATE_IP)" \
+                  --password "$NSROOT_PASSWORD" \
+                  --storage-dir "$(VM_STORAGE_DIR)" \
+                  --boot-timeout "$(BOOT_TIMEOUT)"
+                echo "##[section]Candidate VM provisioned in ${SECONDS}s"
+            env:
+              NSROOT_PASSWORD: $(NSROOT_PASSWORD)
+
+  # ================================================================
+  # Stage 3a: Configure Baseline via Terraform
+  # ================================================================
+  - stage: ConfigureBaseline
+    displayName: "Phase 3a: Configure Baseline (Terraform)"
+    dependsOn:
+      - Setup
+      - ProvisionBaseline
+    condition: |
+      and(
+        succeeded('Setup'),
+        eq('${{ parameters.demoMode }}', 'False'),
+        or(
+          succeeded('ProvisionBaseline'),
+          eq('${{ parameters.skipDeploy }}', 'True')
+        )
+      )
+    jobs:
+      - job: Configure
+        displayName: "Terraform: Baseline"
+        pool: Default
+        timeoutInMinutes: 20
+        steps:
+          - checkout: self
+
+          - task: Bash@3
+            displayName: "Apply Terraform configuration"
+            inputs:
+              targetType: inline
+              script: |
+                SECONDS=0
+                scripts/configure-vpx.sh \
+                  --name "$(BASELINE_NAME)" \
                   --ip "$(BASELINE_IP)" \
                   --password "$NSROOT_PASSWORD" \
                   --rpc-password "$RPC_PASSWORD" \
                   --cert-dir "$(CERT_DIR)" \
                   --tfvars baseline.tfvars \
                   --state baseline.tfstate \
-                  --storage-dir "$(VM_STORAGE_DIR)" \
-                  --boot-timeout "$(BOOT_TIMEOUT)" \
-                  --deploy-timeout 1200
-                echo "##[section]Baseline deploy completed in ${SECONDS}s"
+                  --boot-timeout "$(BOOT_TIMEOUT)"
+                echo "##[section]Baseline configured in ${SECONDS}s"
             env:
               NSROOT_PASSWORD: $(NSROOT_PASSWORD)
               RPC_PASSWORD: $(RPC_PASSWORD)
 
   # ================================================================
-  # Stage 2b: Deploy Candidate VPX — KVM + Terraform
+  # Stage 3b: Configure Candidate via Terraform
   # ================================================================
-  - stage: DeployCandidate
-    displayName: "Phase 2b: Deploy Candidate VPX"
-    dependsOn: Setup
-    condition: and(succeeded(), eq('${{ parameters.demoMode }}', 'False'))
+  - stage: ConfigureCandidate
+    displayName: "Phase 3b: Configure Candidate (Terraform)"
+    dependsOn:
+      - Setup
+      - ProvisionCandidate
+    condition: |
+      and(
+        succeeded('Setup'),
+        eq('${{ parameters.demoMode }}', 'False'),
+        or(
+          succeeded('ProvisionCandidate'),
+          eq('${{ parameters.skipDeploy }}', 'True')
+        )
+      )
     jobs:
-      - job: Candidate
-        displayName: "Candidate (14.1-66.54)"
+      - job: Configure
+        displayName: "Terraform: Candidate"
         pool: Default
-        timeoutInMinutes: 30
+        timeoutInMinutes: 20
         steps:
           - checkout: self
 
           - task: Bash@3
-            displayName: "Deploy VPX onto KVM and configure via Terraform"
+            displayName: "Apply Terraform configuration"
             inputs:
               targetType: inline
               script: |
                 SECONDS=0
-                scripts/deploy-vpx.sh \
+                scripts/configure-vpx.sh \
                   --name "$(CANDIDATE_NAME)" \
-                  --tarball "${{ parameters.candidateTarball }}" \
                   --ip "$(CANDIDATE_IP)" \
                   --password "$NSROOT_PASSWORD" \
                   --rpc-password "$RPC_PASSWORD" \
                   --cert-dir "$(CERT_DIR)" \
                   --tfvars candidate.tfvars \
                   --state candidate.tfstate \
-                  --storage-dir "$(VM_STORAGE_DIR)" \
-                  --boot-timeout "$(BOOT_TIMEOUT)" \
-                  --deploy-timeout 1200
-                echo "##[section]Candidate deploy completed in ${SECONDS}s"
+                  --boot-timeout "$(BOOT_TIMEOUT)"
+                echo "##[section]Candidate configured in ${SECONDS}s"
             env:
               NSROOT_PASSWORD: $(NSROOT_PASSWORD)
               RPC_PASSWORD: $(RPC_PASSWORD)
 
   # ================================================================
-  # Stage 3: Regression Tests
+  # Stage 4: Regression Tests
   # ================================================================
   - stage: RegressionTest
-    displayName: "Phase 3: Regression Tests"
+    displayName: "Phase 4: Regression Tests"
     dependsOn:
-      - DeployBaseline
-      - DeployCandidate
+      - ConfigureBaseline
+      - ConfigureCandidate
     condition: |
       or(
         and(
