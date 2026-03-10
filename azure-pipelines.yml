@@ -1,0 +1,231 @@
+trigger: none
+
+parameters:
+  - name: baselineTarball
+    displayName: "Baseline firmware tarball path"
+    type: string
+    default: "/home/aeonadmin/vpx/NSVPX-KVM-14.1-60.57_nc_64.tgz"
+  - name: candidateTarball
+    displayName: "Candidate firmware tarball path"
+    type: string
+    default: "/home/aeonadmin/vpx/NSVPX-KVM-14.1-66.54_nc_64.tgz"
+
+variables:
+  VM_STORAGE_DIR: /home/vm-data
+  BASELINE_NAME: vpx-baseline
+  CANDIDATE_NAME: vpx-candidate
+  BASELINE_IP: 10.0.1.5
+  CANDIDATE_IP: 10.0.1.6
+  BOOT_TIMEOUT: "180"
+  CERT_DIR: /tmp/vpx-pipeline-certs
+
+stages:
+  # ================================================================
+  # Stage 1: Setup
+  # ================================================================
+  - stage: Setup
+    displayName: "Phase 1: Setup"
+    jobs:
+      - job: Setup
+        displayName: "Validate Environment"
+        pool: Default
+        steps:
+          - checkout: self
+
+          - task: Bash@3
+            displayName: "Validate prerequisites"
+            inputs:
+              targetType: inline
+              script: |
+                echo "Checking required tools..."
+                for TOOL in virsh mkisofs expect qemu-img terraform curl; do
+                  if command -v "$TOOL" &>/dev/null; then
+                    echo "  [OK] $TOOL ($(command -v "$TOOL"))"
+                  else
+                    echo "  [FAIL] $TOOL not found"
+                    exit 1
+                  fi
+                done
+                echo ""
+                echo "Terraform version:"
+                terraform version
+                echo ""
+                echo "Checking VM storage directory..."
+                df -h $(VM_STORAGE_DIR)
+                echo "Checking network..."
+                sudo virsh net-info opn_wan
+
+          - task: Bash@3
+            displayName: "Clean up leftover VMs from previous runs"
+            inputs:
+              targetType: inline
+              script: |
+                scripts/cleanup-vm.sh "$(BASELINE_NAME)" "$(VM_STORAGE_DIR)"
+                scripts/cleanup-vm.sh "$(CANDIDATE_NAME)" "$(VM_STORAGE_DIR)"
+
+          - task: Bash@3
+            displayName: "Decode SSL certificates"
+            inputs:
+              targetType: inline
+              script: |
+                rm -rf "$(CERT_DIR)"
+                mkdir -p "$(CERT_DIR)"
+                echo "$LAB_CA_CRT" | base64 -d > "$(CERT_DIR)/lab-ca.crt"
+                echo "$WILDCARD_CRT" | base64 -d > "$(CERT_DIR)/wildcard.lab.local.crt"
+                echo "$WILDCARD_KEY" | base64 -d > "$(CERT_DIR)/wildcard.lab.local.key"
+                echo "Certificates decoded to $(CERT_DIR)"
+                ls -la "$(CERT_DIR)/"
+            env:
+              LAB_CA_CRT: $(LAB_CA_CRT)
+              WILDCARD_CRT: $(WILDCARD_CRT)
+              WILDCARD_KEY: $(WILDCARD_KEY)
+
+  # ================================================================
+  # Stage 2a: Deploy Baseline VPX — KVM + Terraform
+  # ================================================================
+  - stage: DeployBaseline
+    displayName: "Phase 2a: Deploy Baseline VPX"
+    dependsOn: Setup
+    jobs:
+      - job: Baseline
+        displayName: "Baseline (14.1-60.57)"
+        pool: Default
+        timeoutInMinutes: 30
+        steps:
+          - checkout: self
+
+          - task: Bash@3
+            displayName: "Deploy VPX onto KVM and configure via Terraform"
+            inputs:
+              targetType: inline
+              script: |
+                scripts/deploy-vpx.sh \
+                  --name "$(BASELINE_NAME)" \
+                  --tarball "${{ parameters.baselineTarball }}" \
+                  --ip "$(BASELINE_IP)" \
+                  --password "$NSROOT_PASSWORD" \
+                  --rpc-password "$RPC_PASSWORD" \
+                  --cert-dir "$(CERT_DIR)" \
+                  --tfvars baseline.tfvars \
+                  --state baseline.tfstate \
+                  --storage-dir "$(VM_STORAGE_DIR)" \
+                  --boot-timeout "$(BOOT_TIMEOUT)" \
+                  --deploy-timeout 1200
+            env:
+              NSROOT_PASSWORD: $(NSROOT_PASSWORD)
+              RPC_PASSWORD: $(RPC_PASSWORD)
+
+  # ================================================================
+  # Stage 2b: Deploy Candidate VPX — KVM + Terraform
+  # ================================================================
+  - stage: DeployCandidate
+    displayName: "Phase 2b: Deploy Candidate VPX"
+    dependsOn: Setup
+    jobs:
+      - job: Candidate
+        displayName: "Candidate (14.1-66.54)"
+        pool: Default
+        timeoutInMinutes: 30
+        steps:
+          - checkout: self
+
+          - task: Bash@3
+            displayName: "Deploy VPX onto KVM and configure via Terraform"
+            inputs:
+              targetType: inline
+              script: |
+                scripts/deploy-vpx.sh \
+                  --name "$(CANDIDATE_NAME)" \
+                  --tarball "${{ parameters.candidateTarball }}" \
+                  --ip "$(CANDIDATE_IP)" \
+                  --password "$NSROOT_PASSWORD" \
+                  --rpc-password "$RPC_PASSWORD" \
+                  --cert-dir "$(CERT_DIR)" \
+                  --tfvars candidate.tfvars \
+                  --state candidate.tfstate \
+                  --storage-dir "$(VM_STORAGE_DIR)" \
+                  --boot-timeout "$(BOOT_TIMEOUT)" \
+                  --deploy-timeout 1200
+            env:
+              NSROOT_PASSWORD: $(NSROOT_PASSWORD)
+              RPC_PASSWORD: $(RPC_PASSWORD)
+
+  # ================================================================
+  # Stage 3: Regression Tests
+  # ================================================================
+  - stage: RegressionTest
+    displayName: "Phase 3: Regression Tests"
+    dependsOn:
+      - DeployBaseline
+      - DeployCandidate
+    jobs:
+      - job: Test
+        displayName: "Compare Firmware Outputs"
+        pool: Default
+        timeoutInMinutes: 10
+        steps:
+          - checkout: self
+
+          - task: Bash@3
+            displayName: "Run regression comparison"
+            inputs:
+              targetType: inline
+              script: |
+                scripts/run-regression-tests.sh \
+                  "$(BASELINE_IP)" "$(CANDIDATE_IP)" "$NSROOT_PASSWORD" "$(Build.ArtifactStagingDirectory)/regression-output"
+            env:
+              NSROOT_PASSWORD: $(NSROOT_PASSWORD)
+
+          - task: PublishBuildArtifacts@1
+            displayName: "Publish regression report"
+            condition: always()
+            inputs:
+              pathToPublish: $(Build.ArtifactStagingDirectory)/regression-output
+              artifactName: regression-report
+              publishLocation: Container
+
+  # ================================================================
+  # Stage 4: Cleanup (always runs)
+  # ================================================================
+  - stage: Cleanup
+    displayName: "Phase 4: Cleanup"
+    dependsOn:
+      - DeployBaseline
+      - DeployCandidate
+      - RegressionTest
+    condition: always()
+    jobs:
+      - job: Cleanup
+        displayName: "Remove VMs and Storage"
+        pool: Default
+        steps:
+          - checkout: self
+
+          - task: Bash@3
+            displayName: "Remove baseline VM"
+            inputs:
+              targetType: inline
+              script: scripts/cleanup-vm.sh "$(BASELINE_NAME)" "$(VM_STORAGE_DIR)"
+
+          - task: Bash@3
+            displayName: "Remove candidate VM"
+            inputs:
+              targetType: inline
+              script: scripts/cleanup-vm.sh "$(CANDIDATE_NAME)" "$(VM_STORAGE_DIR)"
+
+          - task: Bash@3
+            displayName: "Remove temporary certificates"
+            inputs:
+              targetType: inline
+              script: rm -rf "$(CERT_DIR)"
+
+          - task: Bash@3
+            displayName: "Verify no VMs left behind"
+            inputs:
+              targetType: inline
+              script: |
+                echo "Current VM list:"
+                sudo virsh list --all
+                echo ""
+                echo "VM storage contents:"
+                ls -lh "$(VM_STORAGE_DIR)/"

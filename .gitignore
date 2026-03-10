@@ -1,0 +1,28 @@
+# VPX firmware images (too large for git)
+*.tgz
+*.qcow2
+*.iso
+
+# SSL private keys (stored as GitHub secrets)
+certs/lab-ca.key
+certs/wildcard.lab.local.key
+certs/wildcard.lab.local.csr
+certs/lab-ca.srl
+
+# Existing step docs (local reference only)
+steps*.md
+
+# Terraform
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
+
+# Agent tool
+agent/
+
+# Editor / OS files
+*.swp
+*.swo
+*~
+.DS_Store

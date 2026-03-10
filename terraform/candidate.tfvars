@@ -1,0 +1,6 @@
+nsip     = "10.0.1.6"
+hostname = "vpx-candidate"
+snip     = "10.0.1.253"
+vip_cs   = "10.0.1.106"
+vip_tcp  = "10.0.1.116"
+vip_dns  = "10.0.1.126"

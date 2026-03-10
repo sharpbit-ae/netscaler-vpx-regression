@@ -1,0 +1,6 @@
+nsip     = "10.0.1.5"
+hostname = "vpx-baseline"
+snip     = "10.0.1.254"
+vip_cs   = "10.0.1.105"
+vip_tcp  = "10.0.1.115"
+vip_dns  = "10.0.1.125"
