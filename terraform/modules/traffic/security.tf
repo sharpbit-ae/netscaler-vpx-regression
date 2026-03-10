@@ -600,7 +600,7 @@ resource "citrixadc_policypatset_pattern_binding" "ua_nuclei" {
 
 resource "citrixadc_policypatset_pattern_binding" "ua_zmeu" {
   name    = citrixadc_policypatset.bad_useragents.name
-  string  = "ZmEu"
+  string  = "zmeu"
   index   = 9
 }
 
