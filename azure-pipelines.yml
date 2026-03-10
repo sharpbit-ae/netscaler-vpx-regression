@@ -16,11 +16,11 @@ parameters:
   - name: baselineTarball
     displayName: "Baseline firmware tarball path"
     type: string
-    default: "/home/aeonadmin/vpx/NSVPX-KVM-14.1-60.57_nc_64.tgz"
+    default: "/home/aeonadmin/Downloads/vpx/NSVPX-KVM-14.1-56.74_nc_64.tgz"
   - name: candidateTarball
     displayName: "Candidate firmware tarball path"
     type: string
-    default: "/home/aeonadmin/vpx/NSVPX-KVM-14.1-66.54_nc_64.tgz"
+    default: "/home/aeonadmin/Downloads/vpx/NSVPX-KVM-14.1-60.57_nc_64.tgz"
 
 # ── Variable group for shared secrets ──
 variables:
