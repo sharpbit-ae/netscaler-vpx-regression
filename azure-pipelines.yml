@@ -322,15 +322,20 @@ stages:
   - stage: RegressionTest
     displayName: "Phase 4: Regression Tests"
     dependsOn:
+      - Setup
       - ConfigureBaseline
       - ConfigureCandidate
     condition: |
       or(
         and(
           eq('${{ parameters.demoMode }}', 'False'),
-          succeeded()
+          in(dependencies.ConfigureBaseline.result, 'Succeeded', 'SucceededWithIssues'),
+          in(dependencies.ConfigureCandidate.result, 'Succeeded', 'SucceededWithIssues')
         ),
-        eq('${{ parameters.demoMode }}', 'True')
+        and(
+          eq('${{ parameters.demoMode }}', 'True'),
+          succeeded('Setup')
+        )
       )
     jobs:
       - job: Test
