@@ -272,6 +272,9 @@ def load_probe_timings(csv_path):
                         row[k] = int(row.get(k, 0))
                     except (ValueError, TypeError):
                         row[k] = 0
+                # Parse pipe-delimited response headers into list
+                raw_hdrs = row.get('response_headers', '')
+                row['response_headers'] = [h.strip() for h in raw_hdrs.split('|') if h.strip()] if raw_hdrs else []
                 rows.append(row)
             return rows
     except Exception as e:
@@ -394,12 +397,15 @@ def render_side_by_side_chart(b_probes, c_probes, width=1100, height=440):
                 is_blocked = row.get('blocked') == 'true'
                 bar_fill = '#ef4444' if is_blocked else b_color
                 blocked_tag = ' | BLOCKED (expected)' if is_blocked else ''
-                tip = f"Baseline #{row.get('request_num', pi+1)} {sc} | HTTP {status}{blocked_tag} | TTFB: {fmt_ms(ttfb)}ms | Total: {fmt_ms(total)}ms"
+                b_key = f"b-{row.get('request_num', pi+1)}"
+                tip = f"Baseline #{row.get('request_num', pi+1)} {sc} | HTTP {status}{blocked_tag} | TTFB: {fmt_ms(ttfb)}ms | Total: {fmt_ms(total)}ms — click for details"
                 # Light extension for total time
                 if total_h > ttfb_h:
-                    svg.append(f'<rect x="{px:.1f}" y="{by_total:.1f}" width="{bar_w:.1f}" height="{max(0.5, total_h - ttfb_h):.1f}" rx="1" fill="{bar_fill}" opacity="0.25"/>')
+                    svg.append(f'<rect x="{px:.1f}" y="{by_total:.1f}" width="{bar_w:.1f}" height="{max(0.5, total_h - ttfb_h):.1f}" rx="1" fill="{bar_fill}" opacity="0.25" '
+                               f'style="cursor:pointer" onclick="showProbeDetail(\'{b_key}\')"/>')
                 # Solid bar for TTFB
                 svg.append(f'<rect x="{px:.1f}" y="{by_ttfb:.1f}" width="{bar_w:.1f}" height="{max(0.5, ttfb_h):.1f}" rx="1" fill="{bar_fill}" opacity="0.85" '
+                           f'style="cursor:pointer" onclick="showProbeDetail(\'{b_key}\')" '
                            f'onmouseover="this.setAttribute(\'opacity\',\'1\');this.setAttribute(\'stroke\',\'white\');this.setAttribute(\'stroke-width\',\'1\')" '
                            f'onmouseout="this.setAttribute(\'opacity\',\'0.85\');this.removeAttribute(\'stroke\');this.removeAttribute(\'stroke-width\')">'
                            f'<title>{esc(tip)}</title></rect>')
@@ -417,11 +423,14 @@ def render_side_by_side_chart(b_probes, c_probes, width=1100, height=440):
                 is_blocked = row.get('blocked') == 'true'
                 bar_fill = '#ef4444' if is_blocked else c_color
                 blocked_tag = ' | BLOCKED (expected)' if is_blocked else ''
-                tip = f"Candidate #{row.get('request_num', pi+1)} {sc} | HTTP {status}{blocked_tag} | TTFB: {fmt_ms(ttfb)}ms | Total: {fmt_ms(total)}ms"
+                c_key = f"c-{row.get('request_num', pi+1)}"
+                tip = f"Candidate #{row.get('request_num', pi+1)} {sc} | HTTP {status}{blocked_tag} | TTFB: {fmt_ms(ttfb)}ms | Total: {fmt_ms(total)}ms — click for details"
                 cx = px + bar_w + pair_gap
                 if total_h > ttfb_h:
-                    svg.append(f'<rect x="{cx:.1f}" y="{by_total:.1f}" width="{bar_w:.1f}" height="{max(0.5, total_h - ttfb_h):.1f}" rx="1" fill="{bar_fill}" opacity="0.25"/>')
+                    svg.append(f'<rect x="{cx:.1f}" y="{by_total:.1f}" width="{bar_w:.1f}" height="{max(0.5, total_h - ttfb_h):.1f}" rx="1" fill="{bar_fill}" opacity="0.25" '
+                               f'style="cursor:pointer" onclick="showProbeDetail(\'{c_key}\')"/>')
                 svg.append(f'<rect x="{cx:.1f}" y="{by_ttfb:.1f}" width="{bar_w:.1f}" height="{max(0.5, ttfb_h):.1f}" rx="1" fill="{bar_fill}" opacity="0.85" '
+                           f'style="cursor:pointer" onclick="showProbeDetail(\'{c_key}\')" '
                            f'onmouseover="this.setAttribute(\'opacity\',\'1\');this.setAttribute(\'stroke\',\'white\');this.setAttribute(\'stroke-width\',\'1\')" '
                            f'onmouseout="this.setAttribute(\'opacity\',\'0.85\');this.removeAttribute(\'stroke\');this.removeAttribute(\'stroke-width\')">'
                            f'<title>{esc(tip)}</title></rect>')
@@ -705,9 +714,63 @@ footer {{
     margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border);
     color: var(--text-dim); font-size: 0.8rem; text-align: center;
 }}
+/* Probe detail modal */
+.modal-overlay {{
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+    z-index: 1000; justify-content: center; align-items: center;
+}}
+.modal-overlay.active {{ display: flex; }}
+.modal-content {{
+    background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
+    max-width: 620px; width: 92%; max-height: 85vh; overflow-y: auto;
+    padding: 1.5rem; position: relative; box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+}}
+.modal-close {{
+    position: absolute; top: 0.75rem; right: 1rem; background: none; border: none;
+    color: var(--text-dim); font-size: 1.4rem; cursor: pointer; line-height: 1;
+}}
+.modal-close:hover {{ color: var(--text); }}
+.modal-title {{
+    font-size: 1.1rem; font-weight: 700; color: var(--text); margin-bottom: 1.2rem;
+    padding-right: 2rem;
+}}
+.modal-title .scenario-badge {{
+    display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem;
+    font-weight: 600; margin-left: 0.5rem; vertical-align: middle;
+}}
+.modal-section {{
+    margin-bottom: 1rem;
+}}
+.modal-section-label {{
+    font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--text-dim); margin-bottom: 0.4rem;
+}}
+.modal-kv {{
+    display: flex; justify-content: space-between; padding: 0.25rem 0;
+    border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 0.85rem;
+}}
+.modal-kv .kv-label {{ color: var(--text-dim); }}
+.modal-kv .kv-value {{ color: var(--text); font-family: monospace; text-align: right; max-width: 65%; word-break: break-all; }}
+.modal-timing-bar {{
+    height: 18px; border-radius: 4px; margin-top: 0.5rem; display: flex; overflow: hidden;
+}}
+.modal-timing-bar span {{
+    display: block; height: 100%; min-width: 2px;
+}}
+.modal-headers-list {{
+    font-family: monospace; font-size: 0.78rem; color: var(--text-dim); line-height: 1.6;
+    max-height: 200px; overflow-y: auto; padding: 0.5rem; background: var(--surface);
+    border-radius: 6px; border: 1px solid var(--border);
+}}
 </style>
 </head>
 <body>
+<div class="modal-overlay" id="probeModal" onclick="if(event.target===this)closeProbeDetail()">
+  <div class="modal-content">
+    <button class="modal-close" onclick="closeProbeDetail()">&times;</button>
+    <div id="probeModalBody"></div>
+  </div>
+</div>
 <div class="container">
 
 <div class="header">
@@ -925,10 +988,32 @@ footer {{
     # --- HTTP Load Profile Charts (Side-by-Side Comparison) ---
     if b_probes or c_probes:
         html_parts.append('<h2 id="loadprofile">HTTP Load Profile (50 Requests)</h2>\n')
-        html_parts.append('<p style="color:var(--text-dim);margin-bottom:1rem;">50 HTTP requests per VPX — side-by-side comparison of baseline (cyan) vs candidate (violet). Red bars = blocked by bot responder (expected). Grouped by scenario type. Hover bars for timing details.</p>\n')
+        html_parts.append('<p style="color:var(--text-dim);margin-bottom:1rem;">50 HTTP requests per VPX — side-by-side comparison of baseline (cyan) vs candidate (violet). Red bars = blocked by bot responder (expected). Grouped by scenario type. <strong style="color:var(--text)">Click any bar</strong> for full request details including timing breakdown and response headers.</p>\n')
 
         # Side-by-side chart
         html_parts.append(render_side_by_side_chart(b_probes, c_probes))
+
+        # Embed probe data as JSON for modal click-through
+        probe_data = {}
+        for prefix, probes in [('b', b_probes), ('c', c_probes)]:
+            for row in (probes or []):
+                key = f"{prefix}-{row.get('request_num', 0)}"
+                probe_data[key] = {
+                    'instance': 'Baseline' if prefix == 'b' else 'Candidate',
+                    'request_num': row.get('request_num', 0),
+                    'scenario': row.get('scenario', ''),
+                    'host': row.get('host', ''),
+                    'method': row.get('method', ''),
+                    'user_agent': row.get('user_agent', ''),
+                    'http_status': row.get('http_status', 0),
+                    'blocked': row.get('blocked', 'false') == 'true',
+                    'time_connect_ms': row.get('time_connect_ms', 0),
+                    'time_tls_ms': row.get('time_tls_ms', 0),
+                    'time_ttfb_ms': row.get('time_ttfb_ms', 0),
+                    'time_total_ms': row.get('time_total_ms', 0),
+                    'response_headers': row.get('response_headers', []),
+                }
+        html_parts.append(f'<script>const PROBE_DATA = {json.dumps(probe_data)};</script>\n')
 
         # Comparison stats table
         b_ttfbs = [r['time_ttfb_ms'] for r in b_probes] if b_probes else []
@@ -1138,6 +1223,83 @@ function exportCSV() {{
     a.download = 'vpx-regression-results.csv';
     a.click();
 }}
+
+// --- Probe detail modal ---
+const SCENARIO_COLORS = {{
+    normal:'#22c55e', api:'#3b82f6', static:'#a855f7', redirect:'#f59e0b',
+    bot:'#ef4444', cors:'#06b6d4', method:'#f97316', burst:'#10b981'
+}};
+
+function showProbeDetail(key) {{
+    if (typeof PROBE_DATA === 'undefined') return;
+    const d = PROBE_DATA[key];
+    if (!d) return;
+    const sc = d.scenario || 'normal';
+    const scColor = SCENARIO_COLORS[sc] || '#94a3b8';
+    const statusColor = d.blocked ? '#ef4444' : (d.http_status >= 200 && d.http_status < 400 ? '#22c55e' : '#f59e0b');
+    const statusLabel = d.http_status + (d.blocked ? ' BLOCKED' : '');
+
+    // Timing bar segments
+    const total = d.time_total_ms || 1;
+    const connPct = (d.time_connect_ms / total * 100).toFixed(1);
+    const tlsPct = (d.time_tls_ms / total * 100).toFixed(1);
+    const serverPct = (Math.max(0, d.time_ttfb_ms - d.time_connect_ms - d.time_tls_ms) / total * 100).toFixed(1);
+    const transferPct = (Math.max(0, d.time_total_ms - d.time_ttfb_ms) / total * 100).toFixed(1);
+
+    // Response headers
+    const hdrs = (d.response_headers || []);
+    const hdrsHtml = hdrs.length > 0
+        ? '<div class="modal-headers-list">' + hdrs.map(h => h.replace(/</g,'&lt;').replace(/>/g,'&gt;')).join('<br>') + '</div>'
+        : '<div style="color:var(--text-dim);font-size:0.85rem;">No headers captured</div>';
+
+    const html = `
+        <div class="modal-title">
+            Request #${{d.request_num}} &mdash; ${{d.instance}}
+            <span class="scenario-badge" style="background:${{scColor}}22;color:${{scColor}};border:1px solid ${{scColor}}44">${{sc.toUpperCase()}}</span>
+        </div>
+        <div class="modal-section">
+            <div class="modal-section-label">Metadata</div>
+            <div class="modal-kv"><span class="kv-label">Instance</span><span class="kv-value">${{d.instance}}</span></div>
+            <div class="modal-kv"><span class="kv-label">Host</span><span class="kv-value">${{d.host}}</span></div>
+            <div class="modal-kv"><span class="kv-label">Method</span><span class="kv-value">${{d.method}}</span></div>
+            <div class="modal-kv"><span class="kv-label">User-Agent</span><span class="kv-value" style="font-size:0.75rem">${{d.user_agent}}</span></div>
+            <div class="modal-kv"><span class="kv-label">Status</span><span class="kv-value" style="color:${{statusColor}};font-weight:700">${{statusLabel}}</span></div>
+        </div>
+        <div class="modal-section">
+            <div class="modal-section-label">Timing</div>
+            <div class="modal-kv"><span class="kv-label">Connect</span><span class="kv-value">${{d.time_connect_ms}}ms</span></div>
+            <div class="modal-kv"><span class="kv-label">TLS</span><span class="kv-value">${{d.time_tls_ms}}ms</span></div>
+            <div class="modal-kv"><span class="kv-label">TTFB</span><span class="kv-value">${{d.time_ttfb_ms}}ms</span></div>
+            <div class="modal-kv"><span class="kv-label">Total</span><span class="kv-value">${{d.time_total_ms}}ms</span></div>
+            <div class="modal-timing-bar">
+                <span style="width:${{connPct}}%;background:#3b82f6" title="Connect ${{d.time_connect_ms}}ms"></span>
+                <span style="width:${{tlsPct}}%;background:#a855f7" title="TLS ${{d.time_tls_ms}}ms"></span>
+                <span style="width:${{serverPct}}%;background:#22c55e" title="Server processing"></span>
+                <span style="width:${{transferPct}}%;background:#f59e0b" title="Transfer"></span>
+            </div>
+            <div style="display:flex;gap:1rem;margin-top:0.3rem;font-size:0.7rem;color:var(--text-dim)">
+                <span><span style="color:#3b82f6">&FilledSmallSquare;</span> Connect</span>
+                <span><span style="color:#a855f7">&FilledSmallSquare;</span> TLS</span>
+                <span><span style="color:#22c55e">&FilledSmallSquare;</span> Server</span>
+                <span><span style="color:#f59e0b">&FilledSmallSquare;</span> Transfer</span>
+            </div>
+        </div>
+        <div class="modal-section">
+            <div class="modal-section-label">Response Headers</div>
+            ${{hdrsHtml}}
+        </div>
+    `;
+    document.getElementById('probeModalBody').innerHTML = html;
+    document.getElementById('probeModal').classList.add('active');
+}}
+
+function closeProbeDetail() {{
+    document.getElementById('probeModal').classList.remove('active');
+}}
+
+document.addEventListener('keydown', function(e) {{
+    if (e.key === 'Escape') closeProbeDetail();
+}});
 </script>
 </body>
 </html>""")

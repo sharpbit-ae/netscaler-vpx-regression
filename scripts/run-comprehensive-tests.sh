@@ -816,7 +816,7 @@ rm -f "$CERT_PEM"
 echo "  [20/20] HTTP load profile (50 requests)..."
 
 TIMING_CSV="${OUTPUT_JSON%.json}-probe-timings.csv"
-echo "request_num,scenario,host,method,user_agent,http_status,time_connect_ms,time_tls_ms,time_ttfb_ms,time_total_ms,blocked" > "$TIMING_CSV"
+echo "request_num,scenario,host,method,user_agent,http_status,time_connect_ms,time_tls_ms,time_ttfb_ms,time_total_ms,blocked,response_headers" > "$TIMING_CSV"
 
 PROBE_HOST="app.lab.local"
 REQ_NUM=0
@@ -826,9 +826,10 @@ probe_request() {
     REQ_NUM=$((REQ_NUM + 1))
 
     local PORT=$([[ "$SCHEME" == "https" ]] && echo 443 || echo 80)
+    local HDR_TMP="/tmp/probe-headers-${REQ_NUM}.txt"
     local RESULT
     # || true prevents set -e from killing the script; RESULT still captures curl output
-    RESULT=$(curl -sk -o /dev/null \
+    RESULT=$(curl -sk -o /dev/null -D "$HDR_TMP" \
         -w '%{http_code}\t%{time_connect}\t%{time_appconnect}\t%{time_starttransfer}\t%{time_total}' \
         --resolve "${HOST}:${PORT}:${VIP_CS}" \
         -H "Host: ${HOST}" \
@@ -857,7 +858,14 @@ probe_request() {
     local SAFE_UA
     SAFE_UA=$(echo "$UA" | tr ',' ';')
 
-    echo "${REQ_NUM},${SCENARIO},${HOST},${METHOD},${SAFE_UA},${STATUS},${CONN_MS},${TLS_MS},${TTFB_MS},${TOTAL_MS},${BLOCKED}" >> "$TIMING_CSV"
+    # Read response headers, pipe-delimit, strip CR/commas for CSV safety
+    local RESP_HDRS=""
+    if [[ -f "$HDR_TMP" ]]; then
+        RESP_HDRS=$(tr -d '\r' < "$HDR_TMP" | sed '/^$/d' | tr '\n' '|' | sed 's/|$//' | tr ',' ';')
+        rm -f "$HDR_TMP"
+    fi
+
+    echo "${REQ_NUM},${SCENARIO},${HOST},${METHOD},${SAFE_UA},${STATUS},${CONN_MS},${TLS_MS},${TTFB_MS},${TOTAL_MS},${BLOCKED},${RESP_HDRS}" >> "$TIMING_CSV"
 }
 
 # Requests 1-10: Normal browsing (app.lab.local)
@@ -903,7 +911,7 @@ done
 
 # Summary
 TOTAL_PROBES=$(tail -n +2 "$TIMING_CSV" | wc -l)
-BLOCKED_COUNT=$(tail -n +2 "$TIMING_CSV" | grep -c ",true$" || echo "0")
+BLOCKED_COUNT=$(tail -n +2 "$TIMING_CSV" | awk -F, '$11=="true"' | wc -l)
 AVG_TTFB=$(tail -n +2 "$TIMING_CSV" | awk -F, '{sum+=$9; n++} END {if(n>0) printf "%.2f", sum/n; else print "0.00"}')
 MAX_TTFB=$(tail -n +2 "$TIMING_CSV" | awk -F, 'BEGIN{m=0} {if($9+0>m) m=$9+0} END {printf "%.2f", m}')
 P95_TTFB=$(tail -n +2 "$TIMING_CSV" | awk -F, '{print $9}' | sort -n | awk '{a[NR]=$1} END {printf "%.2f", a[int(NR*0.95)]}')
