@@ -30,7 +30,7 @@ resource "citrixadc_nsassignment" "maintenance_on" {
 resource "citrixadc_responderaction" "maintenance" {
   name   = "rs_act_maintenance"
   type   = "respondwith"
-  target = "\"HTTP/1.1 503 Service Unavailable\\r\\nRetry-After: 300\\r\\nContent-Length: 0\\r\\n\\r\\n\""
+  target = "\"HTTP/1.1 503 Service Unavailable\\r\\nRetry-After: 300\\r\\nX-Frame-Options: DENY\\r\\nX-Content-Type-Options: nosniff\\r\\nX-XSS-Protection: 1; mode=block\\r\\nReferrer-Policy: strict-origin-when-cross-origin\\r\\nPermissions-Policy: geolocation=(), camera=(), microphone=()\\r\\nContent-Security-Policy: default-src 'self'\\r\\nStrict-Transport-Security: max-age=31536000; includeSubDomains; preload\\r\\nCache-Control: no-store, no-cache\\r\\nContent-Type: text/html\\r\\nContent-Length: 63\\r\\n\\r\\n<html><body><h1>503 Service Unavailable</h1></body></html>\""
 }
 
 resource "citrixadc_responderpolicy" "maintenance" {

@@ -518,6 +518,32 @@ resource "citrixadc_csvserver_responderpolicy_binding" "cors_preflight" {
   bindpoint  = "REQUEST"
 }
 
+# --- Step 11c: Hardened fallback when backends are DOWN ---
+# NetScaler's internal 503 bypasses the rewrite engine, so security headers
+# never get applied. This responder catches all requests and returns a
+# hardened 503 with all security headers embedded when maintenance mode is off
+# but no backend could serve the request. Bound at priority 50 (after bot=40,
+# before maintenance=30).
+
+resource "citrixadc_responderaction" "hardened_503" {
+  name   = "rs_act_hardened_503"
+  type   = "respondwith"
+  target = "\"HTTP/1.1 503 Service Unavailable\\r\\nX-Frame-Options: DENY\\r\\nX-Content-Type-Options: nosniff\\r\\nX-XSS-Protection: 1; mode=block\\r\\nReferrer-Policy: strict-origin-when-cross-origin\\r\\nPermissions-Policy: geolocation=(), camera=(), microphone=()\\r\\nContent-Security-Policy: default-src 'self'\\r\\nStrict-Transport-Security: max-age=31536000; includeSubDomains; preload\\r\\nCache-Control: no-store, no-cache\\r\\nContent-Type: text/html\\r\\nContent-Length: 63\\r\\n\\r\\n<html><body><h1>503 Service Unavailable</h1></body></html>\""
+}
+
+resource "citrixadc_responderpolicy" "hardened_503" {
+  name   = "rs_pol_hardened_503"
+  rule   = "SYS.VSERVER(\"${citrixadc_lbvserver.web.name}\").ACTIVESERVICES.EQ(0) && SYS.VSERVER(\"${citrixadc_lbvserver.web_ssl.name}\").ACTIVESERVICES.EQ(0)"
+  action = citrixadc_responderaction.hardened_503.name
+}
+
+resource "citrixadc_csvserver_responderpolicy_binding" "hardened_503" {
+  name       = citrixadc_csvserver.https.name
+  policyname = citrixadc_responderpolicy.hardened_503.name
+  priority   = 50
+  bindpoint  = "REQUEST"
+}
+
 # --- Step 12: Bot Blocking ---
 
 resource "citrixadc_policypatset" "bad_useragents" {
@@ -587,7 +613,7 @@ resource "citrixadc_policypatset_pattern_binding" "ua_python" {
 resource "citrixadc_responderaction" "block_bot" {
   name   = "rs_act_block_bot"
   type   = "respondwith"
-  target = "\"HTTP/1.1 403 Forbidden\\r\\nContent-Length: 0\\r\\n\\r\\n\""
+  target = "\"HTTP/1.1 403 Forbidden\\r\\nX-Frame-Options: DENY\\r\\nX-Content-Type-Options: nosniff\\r\\nStrict-Transport-Security: max-age=31536000; includeSubDomains; preload\\r\\nContent-Length: 0\\r\\n\\r\\n\""
 }
 
 resource "citrixadc_responderpolicy" "block_bot" {

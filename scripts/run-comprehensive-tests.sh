@@ -402,10 +402,10 @@ for rw_pol in rw_pol_security_headers rw_pol_nosniff rw_pol_xss rw_pol_referrer 
 done
 
 # Responder actions/policies (including CORS preflight)
-for rs_act in rs_act_https_redirect rs_act_block_bot rs_act_maintenance rs_act_cors_preflight; do
+for rs_act in rs_act_https_redirect rs_act_block_bot rs_act_hardened_503 rs_act_maintenance rs_act_cors_preflight; do
     check_resource "Responder" "responderaction/$rs_act"
 done
-for rs_pol in rs_pol_https_redirect rs_pol_block_bot rs_pol_maint1 rs_pol_cors_preflight; do
+for rs_pol in rs_pol_https_redirect rs_pol_block_bot rs_pol_hardened_503 rs_pol_maint1 rs_pol_cors_preflight; do
     check_resource "Responder" "responderpolicy/$rs_pol"
 done
 

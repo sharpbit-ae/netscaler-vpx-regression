@@ -274,115 +274,110 @@ def load_probe_timings(csv_path):
         return []
 
 
-def render_probe_bar_chart(probe_data, label, width=1100, height=420):
-    """Render an SVG bar chart of 50 request timings, color-coded by scenario."""
+def render_probe_bar_chart(probe_data, label, width=1000, height=380):
+    """Render an SVG grouped bar chart — one cluster per scenario type, bars sorted by TTFB."""
     if not probe_data:
         return '<p style="color:var(--text-dim)">No probe timing data available.</p>'
-
-    n = len(probe_data)
-    margin = {'top': 30, 'right': 20, 'bottom': 75, 'left': 70}
-    plot_w = width - margin['left'] - margin['right']
-    plot_h = height - margin['top'] - margin['bottom']
-
-    max_ttfb = max((row.get('time_ttfb_ms', 0) for row in probe_data), default=1) or 1
-    max_ttfb = int(max_ttfb * 1.15)  # headroom
-
-    bar_width = max(4, (plot_w / n) * 0.75)
-    gap = (plot_w - bar_width * n) / (n + 1)
 
     colors = {
         'normal': '#22c55e', 'api': '#3b82f6', 'static': '#a855f7',
         'redirect': '#f59e0b', 'bot': '#ef4444', 'cors': '#06b6d4',
         'method': '#f97316', 'burst': '#10b981',
     }
+    group_labels = {
+        'normal': 'Normal', 'api': 'API', 'static': 'Static',
+        'redirect': 'Redirect', 'bot': 'Bot (blocked)', 'cors': 'CORS',
+        'method': 'Methods', 'burst': 'Burst',
+    }
+
+    # Group requests by scenario, preserving order of first appearance
+    seen_order = []
+    groups = {}
+    for row in probe_data:
+        sc = row.get('scenario', 'normal')
+        if sc not in groups:
+            seen_order.append(sc)
+            groups[sc] = []
+        groups[sc].append(row)
+
+    # Sort bars within each group by TTFB
+    for sc in groups:
+        groups[sc].sort(key=lambda r: r.get('time_ttfb_ms', 0))
+
+    n_groups = len(seen_order)
+    margin = {'top': 30, 'right': 30, 'bottom': 65, 'left': 65}
+    plot_w = width - margin['left'] - margin['right']
+    plot_h = height - margin['top'] - margin['bottom']
+
+    max_ttfb = max((r.get('time_ttfb_ms', 0) for r in probe_data), default=1) or 1
+    max_ttfb = int(max_ttfb * 1.15)
+
+    # Calculate group widths proportional to request count
+    total_reqs = len(probe_data)
+    group_gap = 20
+    usable_w = plot_w - group_gap * (n_groups - 1)
 
     svg = [f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" style="max-width:100%;display:block;margin:0 auto;">']
-    # Background
     svg.append(f'<rect x="{margin["left"]}" y="{margin["top"]}" width="{plot_w}" height="{plot_h}" fill="var(--surface)" rx="4"/>')
 
     # Grid lines + Y labels
-    grid_count = 5
-    for i in range(grid_count + 1):
-        y = margin['top'] + plot_h - (i / grid_count) * plot_h
-        val = (i / grid_count) * max_ttfb
+    for i in range(6):
+        y = margin['top'] + plot_h - (i / 5) * plot_h
+        val = (i / 5) * max_ttfb
         svg.append(f'<line x1="{margin["left"]}" y1="{y:.1f}" x2="{margin["left"] + plot_w}" y2="{y:.1f}" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="4,4"/>')
-        svg.append(f'<text x="{margin["left"] - 10}" y="{y:.1f}" text-anchor="end" fill="var(--text-dim)" font-size="10" font-family="monospace" dominant-baseline="middle">{val:.0f}</text>')
+        svg.append(f'<text x="{margin["left"] - 8}" y="{y:.1f}" text-anchor="end" fill="var(--text-dim)" font-size="10" font-family="monospace" dominant-baseline="middle">{val:.0f}</text>')
 
-    svg.append(f'<text x="18" y="{margin["top"] + plot_h / 2}" text-anchor="middle" fill="var(--text-dim)" font-size="11" transform="rotate(-90, 18, {margin["top"] + plot_h / 2})">TTFB (ms)</text>')
+    svg.append(f'<text x="16" y="{margin["top"] + plot_h / 2}" text-anchor="middle" fill="var(--text-dim)" font-size="11" transform="rotate(-90, 16, {margin["top"] + plot_h / 2})">TTFB (ms)</text>')
 
-    # Identify scenario groups for x-axis brackets
-    groups = []
-    prev_scenario = None
-    group_start = 0
-    for i, row in enumerate(probe_data):
-        sc = row.get('scenario', 'normal')
-        if sc != prev_scenario:
-            if prev_scenario is not None:
-                groups.append((prev_scenario, group_start, i - 1))
-            prev_scenario = sc
-            group_start = i
-    if prev_scenario is not None:
-        groups.append((prev_scenario, group_start, n - 1))
+    # Draw grouped bars
+    x_cursor = margin['left']
+    for gi, sc in enumerate(seen_order):
+        rows = groups[sc]
+        n_bars = len(rows)
+        group_w = (n_bars / total_reqs) * usable_w
+        bar_w = max(4, (group_w / n_bars) * 0.85)
+        bar_gap = (group_w - bar_w * n_bars) / max(1, n_bars + 1)
+        color = colors.get(sc, '#94a3b8')
 
-    # Bars with value labels on tall bars
-    for i, row in enumerate(probe_data):
-        x = margin['left'] + gap + i * (bar_width + gap)
-        ttfb = row.get('time_ttfb_ms', 0)
-        bar_h = (ttfb / max_ttfb) * plot_h if max_ttfb > 0 else 0
-        y = margin['top'] + plot_h - bar_h
-        scenario = row.get('scenario', 'normal')
-        color = colors.get(scenario, '#94a3b8')
-        status = row.get('http_status', '?')
-        method = row.get('method', 'GET')
-        host = row.get('host', '')
-        total = row.get('time_total_ms', 0)
-        ua_short = str(row.get('user_agent', ''))[:40]
-        tip = f"#{row.get('request_num', i + 1)} {scenario} | {host} {method} | HTTP {status} | TTFB: {ttfb}ms | Total: {total}ms | UA: {ua_short}"
+        # Group background stripe
+        svg.append(f'<rect x="{x_cursor:.1f}" y="{margin["top"]}" width="{group_w:.1f}" height="{plot_h}" fill="{color}" opacity="0.04" rx="3"/>')
 
-        # Bar with hover highlight
-        svg.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_width:.1f}" height="{max(1, bar_h):.1f}" rx="2" fill="{color}" opacity="0.9" '
-                   f'onmouseover="this.setAttribute(\'opacity\',\'1\');this.setAttribute(\'stroke\',\'white\');this.setAttribute(\'stroke-width\',\'1\')" '
-                   f'onmouseout="this.setAttribute(\'opacity\',\'0.9\');this.removeAttribute(\'stroke\');this.removeAttribute(\'stroke-width\')">'
-                   f'<title>{esc(tip)}</title></rect>')
+        # Bars
+        for bi, row in enumerate(rows):
+            bx = x_cursor + bar_gap + bi * (bar_w + bar_gap)
+            ttfb = row.get('time_ttfb_ms', 0)
+            bar_h = (ttfb / max_ttfb) * plot_h if max_ttfb > 0 else 0
+            by = margin['top'] + plot_h - bar_h
+            status = row.get('http_status', '?')
+            total = row.get('time_total_ms', 0)
+            method = row.get('method', 'GET')
+            host = row.get('host', '')
+            ua_short = str(row.get('user_agent', ''))[:40]
+            tip = f"#{row.get('request_num', bi+1)} {sc} | {host} {method} | HTTP {status} | TTFB: {ttfb}ms | Total: {total}ms | UA: {ua_short}"
 
-        # TTFB value label above bar (only for bars tall enough)
-        if bar_h > 25:
-            svg.append(f'<text x="{x + bar_width / 2:.1f}" y="{y - 4:.1f}" text-anchor="middle" fill="var(--text-dim)" font-size="8" font-family="monospace">{ttfb:.0f}</text>')
+            svg.append(f'<rect x="{bx:.1f}" y="{by:.1f}" width="{bar_w:.1f}" height="{max(1, bar_h):.1f}" rx="2" fill="{color}" opacity="0.85" '
+                       f'onmouseover="this.setAttribute(\'opacity\',\'1\');this.setAttribute(\'stroke\',\'white\');this.setAttribute(\'stroke-width\',\'1.5\')" '
+                       f'onmouseout="this.setAttribute(\'opacity\',\'0.85\');this.removeAttribute(\'stroke\');this.removeAttribute(\'stroke-width\')">'
+                       f'<title>{esc(tip)}</title></rect>')
 
-    # X-axis: scenario group brackets + labels
-    bracket_y = margin['top'] + plot_h + 8
-    group_labels = {
-        'normal': 'Normal', 'api': 'API', 'static': 'Static',
-        'redirect': 'Redir', 'bot': 'Bot', 'cors': 'CORS',
-        'method': 'Methods', 'burst': 'Burst',
-    }
-    for scenario, start, end in groups:
-        x1 = margin['left'] + gap + start * (bar_width + gap)
-        x2 = margin['left'] + gap + end * (bar_width + gap) + bar_width
-        mid = (x1 + x2) / 2
-        color = colors.get(scenario, '#94a3b8')
-        # Bracket line
-        svg.append(f'<line x1="{x1:.1f}" y1="{bracket_y}" x2="{x2:.1f}" y2="{bracket_y}" stroke="{color}" stroke-width="2" opacity="0.6"/>')
-        svg.append(f'<line x1="{x1:.1f}" y1="{bracket_y - 3}" x2="{x1:.1f}" y2="{bracket_y + 3}" stroke="{color}" stroke-width="2" opacity="0.6"/>')
-        svg.append(f'<line x1="{x2:.1f}" y1="{bracket_y - 3}" x2="{x2:.1f}" y2="{bracket_y + 3}" stroke="{color}" stroke-width="2" opacity="0.6"/>')
-        # Label + count
-        lbl = group_labels.get(scenario, scenario)
-        count = end - start + 1
-        svg.append(f'<text x="{mid:.1f}" y="{bracket_y + 16}" text-anchor="middle" fill="{color}" font-size="10" font-weight="600">{lbl}</text>')
-        svg.append(f'<text x="{mid:.1f}" y="{bracket_y + 28}" text-anchor="middle" fill="var(--text-dim)" font-size="9">({count})</text>')
+        # Group label below
+        mid = x_cursor + group_w / 2
+        label_y = margin['top'] + plot_h + 16
+        lbl = group_labels.get(sc, sc)
+        svg.append(f'<text x="{mid:.1f}" y="{label_y}" text-anchor="middle" fill="{color}" font-size="11" font-weight="600">{lbl}</text>')
 
-    # Legend row at bottom
-    legend_y = height - 6
-    legend_items = [('normal', 'Normal'), ('api', 'API'), ('static', 'Static'),
-                    ('redirect', 'Redirect'), ('bot', 'Bot (blocked)'), ('cors', 'CORS'),
-                    ('method', 'Methods'), ('burst', 'Burst')]
-    total_legend_w = sum(len(lbl) * 7 + 30 for _, lbl in legend_items)
-    lx = margin['left'] + (plot_w - total_legend_w) / 2
-    for sc, lbl in legend_items:
-        c = colors.get(sc, '#94a3b8')
-        svg.append(f'<rect x="{lx:.0f}" y="{legend_y - 8}" width="12" height="12" rx="2" fill="{c}"/>')
-        svg.append(f'<text x="{lx + 16:.0f}" y="{legend_y + 1}" fill="var(--text-dim)" font-size="10">{lbl}</text>')
-        lx += len(lbl) * 7 + 30
+        # Avg TTFB below label
+        avg_ttfb = sum(r.get('time_ttfb_ms', 0) for r in rows) / max(1, len(rows))
+        svg.append(f'<text x="{mid:.1f}" y="{label_y + 14}" text-anchor="middle" fill="var(--text-dim)" font-size="9" font-family="monospace">avg {avg_ttfb:.0f}ms ({n_bars})</text>')
+
+        # Avg line across group
+        avg_y = margin['top'] + plot_h - (avg_ttfb / max_ttfb) * plot_h
+        svg.append(f'<line x1="{x_cursor + 2:.1f}" y1="{avg_y:.1f}" x2="{x_cursor + group_w - 2:.1f}" y2="{avg_y:.1f}" stroke="{color}" stroke-width="1.5" stroke-dasharray="3,3" opacity="0.7"/>')
+
+        x_cursor += group_w + group_gap
+
+    # Title
+    svg.append(f'<text x="{margin["left"] + plot_w / 2}" y="16" text-anchor="middle" fill="var(--text-dim)" font-size="12">{label} — {total_reqs} requests by scenario</text>')
 
     svg.append('</svg>')
     return '\n'.join(svg)
