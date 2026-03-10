@@ -1,110 +1,252 @@
 [![Build Status](https://dev.azure.com/meyuy43h2/netscaler-vpx-regression/_apis/build/status/VPX%20Firmware%20Regression?branchName=main)](https://dev.azure.com/meyuy43h2/netscaler-vpx-regression/_build/latest?definitionId=2&branchName=main)
 
-# Automated Regression Testing for NetScaler VPX Firmware Upgrades
+# NetScaler VPX Firmware Regression Testing
 
-Firmware upgrades on network appliances are high-stakes changes. A new build might alter TLS negotiation behavior, break a rewrite policy, silently reorder cipher suites, or change how a health monitor evaluates backend responses. In production, these differences surface as outages. The standard approach — upgrade a single device, run a few manual checks, and hope nothing broke — doesn't scale and doesn't inspire confidence. You need a way to know exactly what changed before a single production packet is affected.
+Automated pipeline that deploys two NetScaler VPX instances on KVM, applies identical enterprise configurations via Terraform (~195 resources), runs **375 NITRO API tests**, **35 CLI comparisons**, and **50 HTTP probe requests** per appliance, then produces a self-contained interactive HTML report showing exactly what changed between firmware versions.
 
-This project is an automated regression testing pipeline that deploys two NetScaler VPX instances side by side on KVM, applies identical enterprise configurations via Terraform, runs 375 NITRO API tests and 35 CLI comparisons on each, monitors host resource usage throughout, and produces an interactive HTML report showing exactly what changed between firmware versions. One VPX runs the current firmware (baseline), the other runs the candidate build. If the outputs match, the upgrade is safe. If they don't, the report tells you precisely what diverged.
+```
+                          Azure DevOps Pipeline
+                                  │
+           ┌──────────────────────┼──────────────────────┐
+           │                      │                      │
+     ┌─────▼─────┐         ┌─────▼─────┐         ┌──────▼──────┐
+     │   Setup    │         │  Baseline │         │  Candidate  │
+     │ prereqs,   │────────▶│  VPX VM   │────────▶│   VPX VM    │
+     │ certs, VM  │    ┌───▶│ (KVM/QCOW)│    ┌───▶│  (KVM/QCOW) │
+     │ cleanup    │    │    └─────┬─────┘    │    └──────┬──────┘
+     └────────────┘    │          │           │           │
+                       │    Terraform        │     Terraform
+                       │    Phase A          │     Phase A
+                       │    (system) ──▶     │     (system) ──▶
+                       │    reboot ──▶       │     reboot ──▶
+                       │    Phase B          │     Phase B
+                       │    (all modules)    │     (all modules)
+                       │          │           │           │
+                       │          └───────────┼───────────┘
+                       │                      │
+                       │              ┌───────▼────────┐
+                       │              │  Regression    │
+                       │              │  Tests         │
+                       │              │                │
+                       │              │ • 375 NITRO    │
+                       │              │ • 35 CLI diffs │
+                       │              │ • 50 HTTP      │
+                       │              │   probes       │
+                       │              │ • Host metrics  │
+                       │              └───────┬────────┘
+                       │                      │
+                       │              ┌───────▼────────┐
+                       │              │  HTML Report   │
+                       │              │  (artifact)    │
+                       │              └────────────────┘
+                       │
+                       └── Cleanup (always runs): destroy VMs, remove temp files
+```
 
-## Architecture and Deployment
+## Quick Start
 
-The pipeline runs as an Azure DevOps multi-stage pipeline on a self-hosted Linux agent — the same KVM host that provisions the virtual appliances. A manual trigger lets you specify which two firmware tarballs to compare. From there, everything is automated across four stages.
+```bash
+# Prerequisites
+# - Linux KVM host with libvirt, virsh, qemu-img, mkisofs, expect
+# - terraform >= 1.3 with citrix/citrixadc provider ~> 1.45
+# - python3, curl
+# - Azure DevOps self-hosted agent on the KVM host
+# - libvirt network: opn_wan (10.0.1.0/24)
 
-Both VPX instances are deployed in parallel. Each follows the same sequence: extract the QCOW2 disk image from the firmware tarball, generate a preboot userdata ISO using NetScaler's `NS-PRE-BOOT-CONFIG` mechanism to inject the management IP and default route, build a libvirt domain XML defining the VM's CPU, memory, disk, and network bridge attachment, and boot the VM. The preboot configuration means the appliance comes up with networking already configured — no manual console interaction required.
+# Trigger from Azure DevOps UI or CLI:
+az pipelines run --name "VPX Firmware Regression" \
+    --parameters skipDeploy=false demoMode=false
 
-Once SSH is reachable, the pipeline handles first-login password policy enforcement. Newer VPX firmware versions enforce `ForcePasswordChange`, rejecting the default credentials via the NITRO API entirely. The pipeline uses an expect-based SSH session to navigate the forced-change prompt, set the new password, disable `ForcePasswordChange`, and save the configuration — all in a single CLI session. Standard tools like `sshpass` are incompatible with VPX's keyboard-interactive authentication, so expect scripts handle all SSH automation throughout the pipeline.
+# Demo mode (no VPX hardware needed — generates sample data):
+az pipelines run --name "VPX Firmware Regression" \
+    --parameters demoMode=true
+```
 
-## Infrastructure as Code with Terraform
+**Pipeline parameters:**
 
-All VPX configuration is managed through Terraform using the `citrix/citrixadc` provider (v1.45), which communicates with the NITRO REST API. The configuration is organized into four modules totaling approximately 195 managed resources per appliance:
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `demoMode` | `true` | Generate sample report without VPX deployment |
+| `skipDeploy` | `false` | Reuse already-running VMs (skip KVM provisioning) |
+| `baselineTarball` | `NSVPX-KVM-14.1-56.74_nc_64.tgz` | Baseline firmware path |
+| `candidateTarball` | `NSVPX-KVM-14.1-60.57_nc_64.tgz` | Candidate firmware path |
 
-**System** covers enterprise hardening: hostname, DNS (Cloudflare + Google), NTP, password policy enforcement, session timeout limits, RPC node encryption, feature enablement (LB, CS, SSL, Rewrite, Responder, AAA, AppFlow, CMP, SSLVPN), mode configuration, HTTP profile hardening (drop invalid requests, block HTTP/0.9, CONNECT, and TRACE methods), TCP profile hardening (RST attenuation, SYN spoof protection, ECN, timestamps), management lockdown (HTTPS-only GUI with restricted access), and audit logging.
+## How It Works
 
-**SSL** configures TLS default profile enablement and cipher group bindings. Only TLS 1.2 and 1.3 are permitted, with four AEAD ciphers (AES-256-GCM, AES-128-GCM, AES-256-GCM-SHA384 for TLS 1.3, and CHACHA20-POLY1305). HSTS is enforced with a one-year max-age, and non-secure renegotiation is denied.
+### Stage 1: Setup
 
-**Certificates** handles lab CA and wildcard certificate import, upload via NITRO systemfile resources, and certificate-key linking.
+Validates 6 prerequisites (`virsh`, `terraform`, `expect`, `mkisofs`, `qemu-img`, `curl`), cleans leftover VMs from previous runs, and decodes base64-encoded SSL certificates from pipeline secrets to the filesystem.
 
-**Traffic** contains the full application delivery stack: subnet IPs, custom TCP/HTTP profiles (CUBIC congestion control, HTTP/2, WebSocket support), backend server objects, health monitors, four service groups, five LB vservers, two content-switching vservers with hostname-based routing, HTTP-to-HTTPS redirect, 13 rewrite policies for security headers (X-Frame-Options, X-Content-Type-Options, CSP, Referrer-Policy, Permissions-Policy, HSTS, server header removal, X-Forwarded-For injection), rate limiting at 100 requests per second per client IP, bot blocking via pattern set matching against 10 known attack tools (sqlmap, nikto, nmap, nuclei, masscan, dirbuster, gobuster, and others), a maintenance mode toggle using global variables and responder policies, response compression for text, JSON, JavaScript, XML, and SVG, and audit message actions for request and response logging.
+### Stage 2: Deploy (Parallel)
 
-Deployment uses a two-phase Terraform apply strategy. Phase A targets only the system module — this enables the SSL default profile, which requires a warm reboot before SSL profile bindings take effect. After rebooting the VPX via SSH and waiting for the NITRO API to come back online, Phase B applies all four modules together. This two-phase approach is necessary because the `citrixadc` provider cannot apply SSL profile bindings until the default profile parameter has been activated and the appliance has restarted.
+Both VPX instances deploy simultaneously with identical steps:
 
-## Testing: Two Layers of Validation
+1. **Extract** QCOW2 disk from firmware tarball
+2. **Generate** preboot ISO with `NS-PRE-BOOT-CONFIG` XML (management IP, default route)
+3. **Boot** libvirt KVM domain (2 vCPU, 2GB RAM, virtio networking)
+4. **Wait** for SSH (poll port 22 every 3s, 180s timeout)
+5. **Change password** via expect-based SSH session (handles `ForcePasswordChange`)
+6. **Terraform Phase A** — system hardening only (`-target module.system`), enables SSL default profile
+7. **Warm reboot** — required for SSL default profile activation
+8. **Terraform Phase B** — all 4 modules (system, ssl, certificates, traffic)
 
-Testing happens in two complementary layers that together provide both per-object correctness validation and holistic configuration parity checking.
+### Stage 3: Regression Tests
 
-**Layer 1: NITRO API Validation** runs 375 individual tests across 16 categories. Each Terraform-managed resource is queried directly through the NITRO API to verify existence and field-level correctness. The categories span system identity, security parameters, enabled features and modes, HTTP and TCP profiles (both default and custom), SSL profiles and cipher bindings, certificates, backend servers, health monitors, service groups with member bindings, LB vservers with profile and policy bindings, CS vservers with action and policy bindings, rewrite/responder/compression policies, all policy-to-vserver bindings, deep configuration values (pattern sets, string maps, rate limit identifiers), certificate expiry validation, and network IP allocation. Tests are parametrized per VPX so that expected values like virtual IP addresses and subnet IPs are correct for each instance.
+Three layers of validation run against each VPX:
 
-**Layer 2: CLI Output Comparison** collects output from 35 `show` commands on each VPX — covering features, modes, SSL parameters, cipher bindings, HTTP and TCP profiles, vserver states, policy listings, service groups, pattern sets, string maps, certificate keys, and more. Outputs are normalized to strip instance-specific values: management IPs are replaced with `NSIP`, subnet IPs with `SNIP`, virtual IPs with `VIP_CS`/`VIP_TCP`/`VIP_DNS`, hostnames with `VPX_HOSTNAME`, and lines containing uptime or timestamp data are removed. Numbered list prefixes and cipher priority values are also stripped so that the same set of ciphers appearing at different priority positions doesn't produce a false-positive diff. After normalization, both files are sorted and compared with `diff`. Version and hardware strings are flagged as expected differences; everything else is PASS or FAIL.
+**Layer 1: NITRO API Tests (375 assertions, 16 categories)**
 
-## Resource Monitoring
+Each Terraform-managed resource is queried via NITRO REST API and validated for existence and field-level correctness:
 
-A background metrics daemon runs throughout the regression test phase, sampling host resource utilization every 10 seconds. It tracks CPU usage (via `/proc/stat` delta calculation), memory consumption (using `MemAvailable` from `/proc/meminfo` for accuracy), root filesystem disk usage, and network throughput on the primary interface (byte counter deltas from `/proc/net/dev`). All samples are written to a CSV file and fed into the HTML report generator, which renders SVG line charts for each metric along with peak and average summary statistics. This gives visibility into whether the testing workload is approaching host capacity limits.
+| Category | Tests | What's Validated |
+|----------|-------|-----------------|
+| System | 4 | Hostname, DNS servers, NTP |
+| Security | 7 | Strong password, session timeout, RPC encryption, audit |
+| Features | 9 | LB, CS, SSL, Rewrite, Responder, AAA, AppFlow, CMP, SSLVPN |
+| Modes | 5 | FR, TCPB, Edge, L3, ULFD |
+| HTTP Profiles | 8 | Default hardened + custom (HTTP/2, WebSocket, invalid request handling) |
+| TCP Profiles | 8 | RST attenuation, SYN spoof, ECN, timestamps, DSACK, F-RTO |
+| SSL Profiles | 8 | TLS 1.2+, HSTS, cipher priorities, deny renegotiation |
+| Certificates | 6 | CertKey objects, file paths, chain validation |
+| Servers | 2 | Backend server objects and IPs |
+| Monitors | 5 | Health check types, intervals, retries |
+| Service Groups | 6 | Service types, member bindings, monitor bindings |
+| LB VServers | 7 | LB method, persistence, profile bindings |
+| CS VServers | 4 | Content-switching config, SSL bindings |
+| CS Policies | 5 | Hostname-based routing rules and actions |
+| Bindings | 50+ | All SG→member, SG→monitor, LB→SG, CS→policy, rewrite/responder bindings |
+| Deep Values | 30+ | TCP window sizes, SACK, HTTP/2 streams, monitor intervals |
 
-## Interactive HTML Report
+**Layer 2: CLI Output Comparison (35 commands)**
 
-Both test layers, CLI diffs, system logs, and resource metrics feed into a single self-contained HTML report. The report features a dark-themed UI with SVG donut charts showing pass/fail/warning breakdowns per VPX, horizontal bar charts for per-category results, tabbed views switching between baseline and candidate data, and a prominently displayed failures section. CLI differences are rendered as color-coded unified diffs with syntax highlighting for additions, deletions, and hunk headers. System logs (messages, ns.log, events, running config) are collected from both VPXs and displayed in collapsible, tabbed sections. Resource usage charts show CPU, memory, network throughput, and disk utilization over time. Full-text search filters passed tests in real time, and a CSV export button lets you download all results for offline analysis. The report is published as an Azure DevOps build artifact.
+Collects `show` command output from both VPXs, normalizes instance-specific values (IPs → `NSIP`/`SNIP`/`VIP_*`, hostnames → `VPX_HOSTNAME`, timestamps stripped), and diffs the results. Expected differences (version, hardware) are flagged; everything else is PASS or FAIL.
 
-## Pipeline Structure
+**Layer 3: HTTP Probe Requests (50 per VPX)**
 
-The Azure DevOps pipeline is organized into four stages:
+Fires 50 real HTTP requests through each VPX's content-switching VIP across 8 scenarios:
 
-- **Setup** validates prerequisites (virsh, terraform, expect, mkisofs, qemu-img, curl), checks disk space and network availability, cleans up leftover VMs from previous runs, and decodes SSL certificates from base64-encoded pipeline secrets to a shared filesystem path.
-- **Deploy Baseline** and **Deploy Candidate** run in parallel after Setup, each executing the full deployment sequence against their respective firmware tarballs. With a single self-hosted agent they queue sequentially, but the dependency graph is correct for parallel execution if additional agents are added.
-- **Regression Tests** runs after both deploys complete, executing the comprehensive NITRO API tests, CLI collection and comparison, resource monitoring, and HTML report generation.
-- **Cleanup** depends on all prior stages with an unconditional `always()` condition, guaranteeing both VMs are destroyed and all temporary files (disk images, ISOs, decoded certificates) are removed even if any earlier stage fails.
+| Requests | Scenario | What's Tested |
+|----------|----------|--------------|
+| 1–10 | Normal | Standard browsing through `app.lab.local` |
+| 11–15 | API | API endpoint routing via `api.lab.local` |
+| 16–20 | Static | Static content routing via `static.lab.local` |
+| 21–25 | Redirect | HTTP→HTTPS redirect (port 80) |
+| 26–35 | Bot | 10 attack tool user-agents (should return 403) |
+| 36–38 | CORS | OPTIONS preflight requests |
+| 39–42 | Methods | POST, PUT, DELETE, PATCH |
+| 43–50 | Burst | Rapid back-to-back requests |
 
-## Enterprise Considerations
+Each probe captures: HTTP status, TCP connect time, TLS handshake time, TTFB, total time, and full response headers (via `curl -D`).
 
-Credentials never touch the repository. The VPX admin password, RPC node password, and the full SSL certificate chain (CA cert, wildcard cert, wildcard key) are stored as Azure DevOps secret pipeline variables and decoded at runtime. Certificate decoding happens once during Setup and the files are shared via a temporary host path that is cleaned up unconditionally.
+### Stage 4: Cleanup
 
-SSH automation uses expect throughout because VPX's keyboard-interactive authentication is incompatible with standard tools like `sshpass`. All SSH commands include retry logic with configurable attempts and backoff delays. Terraform state files are stored per-VPX (baseline.tfstate and candidate.tfstate) to prevent conflicts during parallel deployment.
+Runs unconditionally (`always()`) — gracefully shuts down both VMs, undefines them from libvirt, and removes all disk images, ISOs, and decoded certificates.
+
+## HTML Report
+
+The report is a single self-contained HTML file published as an Azure DevOps build artifact. It features a dark-themed UI with:
+
+- **Executive summary** — SVG donut charts (pass/fail/warning per VPX), overall regression delta
+- **Category breakdown** — Stacked bar chart per test category, tabbed baseline/candidate views
+- **Failures & warnings** — Prominent section with full test details, color-coded badges
+- **CLI diffs** — Color-coded unified diffs with syntax highlighting
+- **HTTP load profile** — Side-by-side SVG bar chart (baseline cyan, candidate violet, blocked red)
+- **Clickable probe detail modal** — Click any bar to see full request metadata, timing breakdown (Connect/TLS/Server/Transfer visual bar), and response headers
+- **Security headers checklist** — Baseline vs candidate header comparison table
+- **SSL connection details** — Protocol, cipher, certificate chain, key size
+- **Resource usage charts** — CPU, memory, disk, network over time (SVG line charts)
+- **System logs** — Collapsible tabs for VPX logs from both instances
+- **Passed tests** — Collapsible section with full-text search filter
+- **CSV export** — One-click download of all results
+
+## Terraform Configuration (~195 Resources)
+
+Four modules organized by dependency and reboot requirements:
+
+```
+terraform/
+├── main.tf                          Root module (provider + 4 module calls)
+├── variables.tf                     11 variables (IPs, hostnames, secrets)
+├── baseline.tfvars                  Baseline: 10.0.1.5, SNIP .254, VIP .105
+├── candidate.tfvars                 Candidate: 10.0.1.6, SNIP .253, VIP .106
+└── modules/
+    ├── system/       (~20 resources)  Hostname, DNS, NTP, security, features, modes,
+    │                                  HTTP/TCP profile hardening, management lockdown
+    ├── ssl/          (~10 resources)  TLS 1.2+ only, 4 AEAD ciphers, HSTS, frontend/
+    │                                  backend profiles, deny renegotiation
+    ├── certificates/ (~5 resources)   Lab CA + wildcard cert upload, chain linking
+    └── traffic/      (~160 resources) Full ADC stack:
+        ├── main.tf                    SNIP, profiles, servers, monitors, SGs, LB vservers
+        ├── cs.tf                      2 CS vservers, 6 policies (hostname routing)
+        ├── security.tf                13 rewrite policies (security headers), bot blocking
+        │                              (10 attack tools), rate limiting (100 req/s/IP),
+        │                              maintenance mode toggle
+        └── extras.tf                  Compression, audit logging, integrated caching
+```
+
+**Two-phase apply**: Phase A targets `module.system` only (enables SSL default profile → requires warm reboot). Phase B applies all modules after the reboot.
+
+## Security
+
+- All credentials stored as Azure DevOps secret pipeline variables — never committed
+- SSL private keys decoded at runtime to a temp path, cleaned up unconditionally
+- SSH automation uses `expect` (VPX keyboard-interactive auth is incompatible with `sshpass`)
+- Per-VPX Terraform state files prevent conflicts during parallel deployment
+- Bot blocking validates 10 known attack tool signatures (sqlmap, nikto, nmap, nuclei, etc.)
+- Security headers validated: X-Frame-Options, CSP, HSTS, X-Content-Type-Options, Referrer-Policy, Permissions-Policy
 
 ## Extending the Pipeline
 
-The pipeline is designed to be modular. Add NITRO API tests by appending `check_resource`, `check_flag`, or `check_binding` calls in `run-comprehensive-tests.sh`. Add CLI comparisons by appending to the `COMMANDS` array in `run-regression-tests.sh`. Add expected diff exclusions by extending the `case` statement in the diff loop. Add Terraform resources to the appropriate module — system-level resources that require a reboot go in `modules/system/`, everything else in the remaining modules. Change IP ranges by updating `baseline.tfvars`, `candidate.tfvars`, the pipeline variables block, and the normalization patterns. Test additional firmware versions by triggering multiple pipeline runs with different tarball paths.
-
-## Prerequisites
-
-- Linux KVM host with `libvirt`, `virsh`, `qemu-img`
-- `mkisofs` (from `cdrtools` or `genisoimage`)
-- `expect` for keyboard-interactive SSH
-- `terraform` >= 1.3 with `citrix/citrixadc` provider ~> 1.45
-- `python3` for HTML report generation
-- libvirt network `opn_wan` (10.0.1.0/24)
-- Azure DevOps self-hosted agent on the KVM host (pool: `Default`)
-- Two NetScaler VPX KVM firmware tarballs (`.tgz` containing `.qcow2`)
+| To add... | Edit... |
+|-----------|---------|
+| NITRO API test | Append `check_resource`/`check_binding` in `run-comprehensive-tests.sh` |
+| CLI comparison | Add to `COMMANDS` array in `run-regression-tests.sh` |
+| Expected diff exclusion | Extend `case` statement in diff loop |
+| Terraform resource | Add to appropriate module (`system/` if reboot needed, else `traffic/`) |
+| IP range change | Update `*.tfvars`, pipeline variables, and normalization patterns |
+| New firmware version | Trigger pipeline with different tarball paths |
 
 ## Project Structure
 
 ```
-azure-pipelines.yml                  Azure DevOps pipeline (4 stages, parallel deploys)
+azure-pipelines.yml                  4-stage pipeline (Setup → Deploy×2 → Test → Cleanup)
+blog-post.md                        Technical deep-dive article
+tree-table.md                       Full resource inventory and test coverage map
 
 scripts/
-  deploy-vpx.sh                     Orchestrator: KVM provision + password + Terraform
-  create-vpx-vm.sh                  Extract tarball, create preboot ISO, define+start VM
-  wait-for-boot.sh                  Poll SSH until VPX responds
-  change-default-password.sh         Expect-based password change + disable ForcePasswordChange
-  change-password-ssh.exp            Expect script for interactive password change flow
+  deploy-vpx.sh                     8-step orchestrator (provision → password → terraform)
+  provision-vpx.sh                  3-step: create VM → boot → password
+  configure-vpx.sh                  3-step: terraform Phase A → reboot → Phase B
+  create-vpx-vm.sh                  Extract tarball → preboot ISO → define+start VM
+  wait-for-boot.sh                  Poll SSH port until responsive
+  wait-for-nitro.sh                 Poll NITRO API (HTTPS→HTTP fallback) until 200
+  change-default-password.sh        Expect SSH + NITRO API fallback password change
+  reboot-vpx.sh                     SSH warm reboot + force destroy fallback
+  cleanup-vm.sh                     Shutdown → undefine → remove storage
   ssh-vpx.sh / ssh-vpx.exp          SSH wrappers for keyboard-interactive auth
-  reboot-vpx.sh                     SSH warm reboot wrapper
-  wait-for-nitro.sh                 Poll NITRO API (HTTPS first, HTTP fallback)
-  run-regression-tests.sh           CLI collection, normalize, diff, metrics, report orchestration
-  run-comprehensive-tests.sh         375 NITRO API tests across 16 categories
-  generate-html-report.py           Interactive HTML report (SVG charts, search, CSV export)
-  collect-metrics.sh                Background CPU/RAM/disk/network monitor (CSV output)
-  cleanup-vm.sh                     Shutdown, undefine, remove VM storage
+  change-password-ssh.exp           Expect script for forced-change prompt
+  run-regression-tests.sh           CLI collection, normalize, diff orchestration
+  run-comprehensive-tests.sh        375 NITRO API tests (16 categories) + 50 HTTP probes
+  generate-html-report.py           Interactive HTML report (charts, diffs, modals, export)
+  generate-sample-data.py           Demo mode: realistic sample data without hardware
+  generate-junit-report.py          Convert results to JUnit XML for Azure Tests tab
+  collect-metrics.sh                Background CPU/RAM/disk/network sampler (10s intervals)
 
 terraform/
-  main.tf                           Root module calling 4 submodules
+  main.tf                           Root module (4 submodules)
   variables.tf / versions.tf        Variables and provider constraints
-  baseline.tfvars / candidate.tfvars Per-VPX IP and hostname parameters
+  baseline.tfvars / candidate.tfvars Per-VPX parameters
   modules/
     system/                         Enterprise hardening (~20 resources)
-    ssl/                            SSL/TLS profile + cipher configuration (~10 resources)
-    certificates/                   Certificate import and linking (~5 resources)
-    traffic/                        Full traffic management stack (~160 resources)
+    ssl/                            TLS profile + cipher config (~10 resources)
+    certificates/                   Cert import and chain linking (~5 resources)
+    traffic/                        Full ADC stack (~160 resources)
 
 templates/
-  userdata.tpl                      Preboot config XML (management IP, gateway)
+  userdata.tpl                      NS-PRE-BOOT-CONFIG XML (management IP, gateway)
   vpx-domain.tpl                    Libvirt domain XML (vCPU, RAM, disk, network)
+
+certs/
+  lab-ca.crt                        Lab CA certificate
+  wildcard.lab.local.crt            Wildcard cert (private key in pipeline secrets)
 ```
