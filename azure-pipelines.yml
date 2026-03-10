@@ -345,48 +345,6 @@ stages:
                 echo "  Agent:     $(Agent.MachineName)"
                 echo "  Finished:  $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 
-  # ================================================================
-  # Stage 4: Cleanup (always runs, skipped in demo mode)
-  # ================================================================
-  - stage: Cleanup
-    displayName: "Phase 4: Cleanup"
-    dependsOn:
-      - DeployBaseline
-      - DeployCandidate
-      - RegressionTest
-    condition: and(always(), eq('${{ parameters.demoMode }}', 'False'))
-    jobs:
-      - job: Cleanup
-        displayName: "Remove VMs and Storage"
-        pool: Default
-        steps:
-          - checkout: self
-
-          - task: Bash@3
-            displayName: "Remove baseline VM"
-            inputs:
-              targetType: inline
-              script: scripts/cleanup-vm.sh "$(BASELINE_NAME)" "$(VM_STORAGE_DIR)"
-
-          - task: Bash@3
-            displayName: "Remove candidate VM"
-            inputs:
-              targetType: inline
-              script: scripts/cleanup-vm.sh "$(CANDIDATE_NAME)" "$(VM_STORAGE_DIR)"
-
-          - task: Bash@3
-            displayName: "Remove temporary certificates"
-            inputs:
-              targetType: inline
-              script: rm -rf "$(CERT_DIR)"
-
-          - task: Bash@3
-            displayName: "Verify no VMs left behind"
-            inputs:
-              targetType: inline
-              script: |
-                echo "Current VM list:"
-                sudo virsh list --all
-                echo ""
-                echo "VM storage contents:"
-                ls -lh "$(VM_STORAGE_DIR)/"
+  # Cleanup stage removed — VMs are kept alive after pipeline for manual inspection.
+  # To clean up manually: scripts/cleanup-vm.sh vpx-baseline /home/vm-data
+  #                        scripts/cleanup-vm.sh vpx-candidate /home/vm-data
